@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import kernel as K
+from ..i18n import tr
 from .. import units as U
 from .. import features as F
 from ..document import Document
@@ -220,16 +221,16 @@ class MainWindow(QMainWindow):
         tl.setSpacing(0)
         plus = QToolButton()
         plus.setText("+")
-        plus.setToolTip("Create a Part Studio, an Assembly or a Drawing")
+        plus.setToolTip(tr("Create a Part Studio, an Assembly or a Drawing"))
         plus.setFixedSize(40, 32)
         plus.setStyleSheet("QToolButton { font-size: 20px; color: #3b4250; border: none; border-right: 1px solid #d5d9de;"
                            " border-radius: 0; background: #eef0f3; }"
                            "QToolButton:hover { background: #e3e8ef; }")
         plus.setPopupMode(QToolButton.InstantPopup)
         pm = QMenu(plus)
-        pm.addAction(icon("part", 16), "Create Part Studio", self.new_doc)
-        pm.addAction(icon("assembly", 16), "Create Assembly", self.new_assembly)
-        pm.addAction(icon("drawing", 16), "Create Drawing…", lambda: self.new_drawing())
+        pm.addAction(icon("part", 16), tr("Create Part Studio"), self.new_doc)
+        pm.addAction(icon("assembly", 16), tr("Create Assembly"), self.new_assembly)
+        pm.addAction(icon("drawing", 16), tr("Create Drawing…"), lambda: self.new_drawing())
         plus.setMenu(pm)
         tl.addWidget(plus)
         tl.addWidget(self.tabs, 1)
@@ -270,7 +271,7 @@ class MainWindow(QMainWindow):
         self.measure = _MeasurePanel(self.viewport, lambda: self.start_feature("measure_value"))
         self.measure.hide()
         self.status = self.statusBar()
-        self.status.showMessage("Ready")
+        self.status.showMessage(tr("Ready"))
 
         lp = self.left
         lp.features.editRequested.connect(self.edit_feature)
@@ -313,14 +314,14 @@ class MainWindow(QMainWindow):
         h.addSpacing(10)
         home_btn = QToolButton()
         home_btn.setObjectName("menuButton")
-        home_btn.setText("⌂  Home")
-        home_btn.setToolTip("Home — new projects and recent files")
+        home_btn.setText(tr("⌂  Home"))
+        home_btn.setToolTip(tr("Home — new projects and recent files"))
         home_btn.clicked.connect(lambda: self.show_home() if self.main_stack.currentIndex() == 0 else self.show_workspace())
         self.home_btn = home_btn
         h.addWidget(home_btn)
         menu_btn = QToolButton()
         menu_btn.setObjectName("menuButton")
-        menu_btn.setText("☰  Document")
+        menu_btn.setText(tr("☰  Document"))
         menu_btn.setPopupMode(QToolButton.InstantPopup)
         m = QMenu(menu_btn)
         self._add_action(m, "New Part Studio", self.new_doc, "Ctrl+N")
@@ -357,7 +358,7 @@ class MainWindow(QMainWindow):
         h.addWidget(menu_btn)
         view_btn = QToolButton()
         view_btn.setObjectName("menuButton")
-        view_btn.setText("View")
+        view_btn.setText(tr("View"))
         view_btn.setPopupMode(QToolButton.InstantPopup)
         vm = QMenu(view_btn)
         for i, name in enumerate(("Front", "Back", "Left", "Right", "Top", "Bottom", "Isometric"), 1):
@@ -387,7 +388,7 @@ class MainWindow(QMainWindow):
         self.orbit_actions = {}
         for mode, label in (("cursor", "The point under the mouse (model centre over empty space)"),
                             ("centre", "The centre of the model"), ("origin", "The origin")):
-            a = QAction(label, self)
+            a = QAction(tr(label), self)
             a.setCheckable(True)
             a.triggered.connect(lambda _=False, md=mode: self.set_orbit_mode(md))
             rgrp.addAction(a)
@@ -427,6 +428,17 @@ class MainWindow(QMainWindow):
             tm.addAction(a)
             self.theme_actions[mode] = a
         vm.addSeparator()
+        lang_menu = submenu(vm, "Language")
+        lang_group = QActionGroup(self)
+        selected_language = str(self.settings.value("language", "system"))
+        for code, label in (("system", tr("System language")), ("en", "English"), ("ru", "Русский")):
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(code == selected_language)
+            action.triggered.connect(lambda _=False, lang=code: self._set_language_preference(lang))
+            lang_group.addAction(action)
+            lang_menu.addAction(action)
+        vm.addSeparator()
         self._add_action(vm, "Customize the S menu…", self.customize_s_menu)
         im = submenu(vm, "Icons")
         im.addAction("Open my icons folder…", self.open_icons_folder)
@@ -437,8 +449,8 @@ class MainWindow(QMainWindow):
         # ---- what a click / box selection may pick: vertices, edges, faces, solids, sketches, planes
         self.sel_btn = QToolButton()
         self.sel_btn.setObjectName("menuButton")
-        self.sel_btn.setText("Select")
-        self.sel_btn.setToolTip("Choose which kinds of things can be selected (vertices, edges, faces …)")
+        self.sel_btn.setText(tr("Select"))
+        self.sel_btn.setToolTip(tr("Choose which kinds of things can be selected (vertices, edges, faces …)"))
         self.sel_btn.setPopupMode(QToolButton.InstantPopup)
         selm = QMenu(self.sel_btn)
         self.sel_actions = {}
@@ -454,14 +466,14 @@ class MainWindow(QMainWindow):
             selm.addAction(a)
             self.sel_actions[key] = a
         selm.addSeparator()
-        ra = QAction("Reset to default", self)
+        ra = QAction(tr("Reset to default"), self)
         ra.triggered.connect(self._reset_selection_filter)
         selm.addAction(ra)
         self.sel_btn.setMenu(selm)
         h.addWidget(self.sel_btn)
         search_btn = QToolButton()
         search_btn.setObjectName("menuButton")
-        search_btn.setText("Search tools…")
+        search_btn.setText(tr("Search tools…"))
         search_btn.setIcon(icon("search"))
         search_btn.setToolTip("Find a tool by name (Alt+C or Ctrl+Space)")
         search_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
@@ -651,8 +663,16 @@ class MainWindow(QMainWindow):
             a.blockSignals(False)
         self._selection_filter_changed()
 
+    def _set_language_preference(self, language):
+        self.settings.setValue("language", language)
+        self.settings.sync()
+        message = ("FREESHAPE_LANG overrides the saved language preference."
+                   if os.environ.get("FREESHAPE_LANG") else
+                   "Restart FreeShape to apply the selected language.")
+        QMessageBox.information(self, tr("Language"), tr(message))
+
     def _add_action(self, menu, text, slot, shortcut=None):
-        a = QAction(text, self)
+        a = QAction(tr(text), self)
         if shortcut:
             a.setShortcut(QKeySequence(shortcut))
             a.setShortcutContext(Qt.WindowShortcut)
@@ -666,7 +686,7 @@ class MainWindow(QMainWindow):
         b.setIcon(icon(name))
         b.setProperty("icon_name", name)
         b.setIconSize(QSize(26, 26))
-        b.setToolTip(tip)
+        b.setToolTip(tr(tip))
         b.setCheckable(checkable)
         b.setAutoRaise(True)
         b.clicked.connect(slot)
@@ -681,9 +701,9 @@ class MainWindow(QMainWindow):
         b.setPopupMode(QToolButton.MenuButtonPopup)
         m = QMenu(b)
         for name, tip, slot in items:
-            label = tip.split(" — ")[0]
+            label = tr(tip).split(" — ")[0]
             a = m.addAction(icon(name, 20), label)
-            a.setToolTip(tip)
+            a.setToolTip(tr(tip))
             a.setProperty("icon_name", name)
             a.triggered.connect(lambda _=False, sl=slot: sl())
             self._menu_actions.append((a, name))
@@ -706,7 +726,7 @@ class MainWindow(QMainWindow):
         h.addWidget(_sep())
         sk = self._tb(h, "sketch", "Sketch (Shift+S) — select a plane or flat face first, or pick one after",
                       lambda: self.start_sketch())
-        sk.setText("Sketch")
+        sk.setText(tr("Sketch"))
         sk.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         sk.setObjectName("sketchButton")
         h.addWidget(_sep())
@@ -980,7 +1000,7 @@ class MainWindow(QMainWindow):
             ("extrude", "Extrude this sketch (Shift+E)"), ("revolve", "Revolve this sketch (Shift+W)"),
             ("sweep", "Sweep this sketch — then pick the path"))])
         done = QToolButton()
-        done.setText("✓  Finish sketch")
+        done.setText(tr("✓  Finish sketch"))
         done.setStyleSheet("QToolButton { background:%s; color:white; font-weight:600; padding:5px 12px; border-radius:4px; }"
                            "QToolButton:hover { background:%s; }" % (theme.ACCENT, theme.ACCENT_DARK))
         done.clicked.connect(self.finish_sketch)
@@ -1029,8 +1049,8 @@ class MainWindow(QMainWindow):
         b.setPopupMode(QToolButton.MenuButtonPopup)
         m = QMenu(b)
         for name, tip in items:
-            a = m.addAction(icon(icon_of.get(name, name), 20), tip.split(" — ")[0])
-            a.setToolTip(tip)
+            a = m.addAction(icon(icon_of.get(name, name), 20), tr(tip).split(" — ")[0])
+            a.setToolTip(tr(tip))
             a.triggered.connect(lambda _=False, n=name: self._sk_tool(n))
             self._menu_actions.append((a, icon_of.get(name, name)))
             self._sketch_buttons[name] = b
@@ -2319,14 +2339,14 @@ class MainWindow(QMainWindow):
         m.clear()
         lst = [x for x in self._recent() if os.path.exists(x)]
         if not lst:
-            a = m.addAction("No recent documents")
+            a = m.addAction(tr("No recent documents"))
             a.setEnabled(False)
             return
         for path in lst:
             a = m.addAction(os.path.basename(path), lambda p=path: self.open_any(p))
             a.setToolTip(path)
         m.addSeparator()
-        m.addAction("Clear list", self._clear_recent)
+        m.addAction(tr("Clear list"), self._clear_recent)
 
     # ================================================================== autosave & recovery
     @staticmethod
