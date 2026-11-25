@@ -17,7 +17,7 @@ on:
     types: [published]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -40,7 +40,8 @@ jobs:
           python -m pip install -r requirements.txt "pyinstaller>=6.16"
       - name: Check packaging scripts
         run: |
-          bash -n packaging/linux/build_deb.sh packaging/linux/test_deb.sh
+          bash -n packaging/linux/build_deb.sh
+          bash -n packaging/linux/test_deb.sh
           python - <<'PY'
           import xml.etree.ElementTree as ET
           ET.parse("packaging/linux/freeshape.xml")
@@ -61,12 +62,6 @@ jobs:
           name: freeshape-deb-amd64
           path: dist/freeshape_*.deb
           if-no-files-found: error
-      - name: Attach DEB to release
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/freeshape_*.deb --clobber
-
   compatibility:
     needs: build
     runs-on: ubuntu-latest
@@ -89,3 +84,20 @@ jobs:
           freeshape --self-test /tmp/freeshape-selftest.txt
           grep -qx OK /tmp/freeshape-selftest.txt
           dpkg-query -W freeshape
+
+  publish:
+    if: github.event_name == 'release'
+    needs: [build, compatibility]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: freeshape-deb-amd64
+          path: dist
+      - name: Attach validated DEB to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/freeshape_*.deb --clobber
