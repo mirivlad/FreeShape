@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-freeshape-part">
+    <comment>FreeShape Part Studio</comment>
+    <glob pattern="*.fshape"/>
+  </mime-type>
+  <mime-type type="application/x-freeshape-assembly">
+    <comment>FreeShape Assembly</comment>
+    <glob pattern="*.fasm"/>
+  </mime-type>
+  <mime-type type="application/x-freeshape-drawing">
+    <comment>FreeShape Drawing</comment>
+    <glob pattern="*.fdwg"/>
+  </mime-type>
+</mime-info>

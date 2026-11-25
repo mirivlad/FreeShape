@@ -1,0 +1,91 @@
+name: Linux DEB (Debian and Ubuntu)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, feature/deb-packaging]
+    paths:
+      - "packaging/linux/**"
+      - "packaging/freeshape.spec"
+      - "freeshape/**"
+      - "requirements.txt"
+      - "pyproject.toml"
+      - ".github/workflows/linux-deb.yml"
+  pull_request:
+    branches: [master]
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Qt and packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libopengl0 libxkbcommon0 \
+            libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
+            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-xinerama0 libfontconfig1 \
+            libdbus-1-3 file dpkg-dev
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt "pyinstaller>=6.16"
+      - name: Check packaging scripts
+        run: |
+          bash -n packaging/linux/build_deb.sh packaging/linux/test_deb.sh
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          ET.parse("packaging/linux/freeshape.xml")
+          PY
+      - name: Build DEB and verify its contents
+        run: |
+          PYTHON=python bash packaging/linux/build_deb.sh
+          bash packaging/linux/test_deb.sh dist/freeshape_*.deb
+          dpkg-deb --contents dist/freeshape_*.deb | tail -20
+      - name: Install DEB and test frozen application
+        run: |
+          sudo apt-get install -y ./dist/freeshape_*.deb
+          freeshape --self-test "$RUNNER_TEMP/installed-selftest.txt"
+          grep -qx OK "$RUNNER_TEMP/installed-selftest.txt"
+          dpkg -s freeshape
+      - uses: actions/upload-artifact@v4
+        with:
+          name: freeshape-deb-amd64
+          path: dist/freeshape_*.deb
+          if-no-files-found: error
+      - name: Attach DEB to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/freeshape_*.deb --clobber
+
+  compatibility:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: ["debian:12", "debian:13", "ubuntu:24.04", "ubuntu:26.04"]
+    container:
+      image: ${{ matrix.distro }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: freeshape-deb-amd64
+          path: /tmp/freeshape-deb
+      - name: Verify installation and non-GUI self-test
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y /tmp/freeshape-deb/freeshape_*.deb
+          freeshape --self-test /tmp/freeshape-selftest.txt
+          grep -qx OK /tmp/freeshape-selftest.txt
+          dpkg-query -W freeshape

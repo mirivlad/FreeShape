@@ -37,6 +37,36 @@ three to the release (`.github/workflows/mac.yml`). **Actions → Build (Windows
 test build instead, with the files, a screenshot of FreeShape running on the Mac and the logs on a private
 *Test builds* draft release (only you can see it). On a Mac of your own, `bash packaging/mac/build_mac.sh` builds the Mac app locally.
 
+## Make a Debian / Ubuntu .deb
+
+Use the same PyInstaller recipe as the AppImage, but install it as a proper Debian
+package with an application-menu entry, native file associations and
+`/usr/bin/freeshape`. The app itself is isolated in `/opt/freeshape`; no
+system Python packages are changed and files under `$HOME` are not touched.
+
+Build on **Ubuntu 22.04 amd64**, which has an older glibc than current Debian and
+Ubuntu releases, with Python 3.10–3.13 and the Qt system libraries listed in
+`.github/workflows/linux-deb.yml`:
+
+```sh
+python3 -m pip install -r requirements.txt "pyinstaller>=6.16"
+PYTHON=python3 bash packaging/linux/build_deb.sh
+bash packaging/linux/test_deb.sh dist/freeshape_*.deb
+sudo apt install ./dist/freeshape_*.deb
+freeshape
+```
+
+The package registers `.fshape`, `.fasm` and `.fdwg`, ships the app icon,
+uses host OpenGL graphics libraries and is removed with `sudo apt remove freeshape`.
+Source and license remain GPL-3.0-or-later. Do not try to wrap an AppImage as
+a DEB: `build_deb.sh` packages the actual PyInstaller application directory.
+
+`Linux DEB (Debian and Ubuntu)` in GitHub Actions builds the package on Ubuntu
+22.04, performs a package install and an application self-test there, then
+installs/tests it on Debian 12/13 and Ubuntu 24.04/26.04. A published
+release attaches the DEB automatically. These checks do not replace a manual
+desktop/OpenGL test on physical machines.
+
 ## Make a Linux AppImage
 
 On Linux, with the requirements and PyInstaller installed (`python3 -m pip install -r requirements.txt pyinstaller`),
