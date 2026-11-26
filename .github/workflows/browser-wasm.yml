@@ -1,0 +1,46 @@
+name: Browser WASM experiment
+on:
+  push:
+    branches: [experiment/browser-wasm]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build local static image
+        run: docker build -f webcad/Dockerfile -t freeshape-web:test .
+      - name: Start static server
+        run: |
+          docker run -d --name cad -p 8086:8080 freeshape-web:test
+          for i in $(seq 1 30); do curl -fsS http://localhost:8086/healthz && exit 0; sleep 1; done
+          exit 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install browser tests
+        working-directory: webcad
+        run: |
+          npm install --no-save playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Verify actual CAD in browser
+        run: node webcad/smoke.mjs
+      - name: Logs
+        if: always()
+        run: docker logs cad || true
+      - name: Publish verified image
+        if: github.repository == 'mirivlad/FreeShape'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker tag freeshape-web:test ghcr.io/mirivlad/freeshape-web:wasm-experiment
+          docker tag freeshape-web:test ghcr.io/mirivlad/freeshape-web:wasm-0.1.0
+          docker push ghcr.io/mirivlad/freeshape-web:wasm-0.1.0
+          docker push ghcr.io/mirivlad/freeshape-web:wasm-experiment

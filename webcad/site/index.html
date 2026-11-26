@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FreeShape Web — WASM experiment</title>
+<link rel="stylesheet" href="style.css">
+<link rel="manifest" href="manifest.webmanifest">
+<script type="importmap">{"imports":{"three":"./three/build/three.module.js"}}</script>
+</head><body>
+<header><strong>FreeShape <span>Web</span></strong><small>WASM · эксперимент 0.1.0</small><span id="runtime">Инициализация…</span></header>
+<nav><button id="demo" disabled>Демо-модель</button><button id="open" disabled>Открыть .fshape</button><input type="file" id="file" accept=".fshape" hidden>
+<button id="save" disabled>Сохранить .fshape</button><button id="step" disabled>STEP</button><button id="stl" disabled>STL</button><button id="rebuild" disabled>Перестроить</button><button id="fit" disabled>Вписать</button><button id="offline">Офлайн-кэш</button></nav>
+<main><aside><h2>Документ</h2><div id="name">—</div><h2>История операций</h2><div id="features"></div>
+<form id="edit" hidden><h2>Выдавливание</h2><label>Глубина, мм <input id="depth" type="number" min="0.001" step="any" required></label><button id="apply">Применить</button></form>
+<h2>Диагностика</h2><div id="metrics"></div><pre id="errors" role="alert"></pre></aside>
+<section id="view"><div id="hint">Загрузка локального ядра…</div></section></main>
+<footer><span id="status" role="status">Загрузка…</span><span>Все вычисления локально · без загрузки проектов на сервер</span></footer>
+<script type="module" src="app.js"></script></body></html>

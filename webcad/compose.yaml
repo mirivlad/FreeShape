@@ -1,0 +1,7 @@
+services:
+  freeshape-web:
+    image: ghcr.io/mirivlad/freeshape-web:wasm-experiment
+    container_name: freeshape-web
+    restart: unless-stopped
+    ports:
+      - "8086:8080"

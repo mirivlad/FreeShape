@@ -1,0 +1,8 @@
+{
+  "name": "FreeShape Web experiment",
+  "short_name": "FreeShape Web",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#edf1f6",
+  "theme_color": "#2574c6"
+}
