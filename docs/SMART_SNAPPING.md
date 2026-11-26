@@ -7,6 +7,8 @@ This extends the existing sketch snapping system and the existing constraint sol
 - The gold symbol and label tell you which snap is active. Source edges are
   highlighted. Hover a source point, then move horizontally or vertically
   away from it to see a dotted guide. Two sources can form an X/Y intersection.
+- Hover an existing line before drawing a second one to infer parallel,
+  perpendicular or equal length. Hover a circle to infer equal radius.
 - Hold Shift to temporarily bypass snapping.
 
 ## Test cases
@@ -15,7 +17,8 @@ This extends the existing sketch snapping system and the existing constraint sol
 3. Crossing lines, line/circle and circle/circle intersections, including rectangle helper diagonals.
 4. Arc midpoint and quadrant; edit source geometry.
 5. Horizontal/vertical alignment from previously hovered points.
-6. Shift bypass; undo/redo and save/reopen.
+6. Parallel/perpendicular/equal length with an awakened reference line.
+7. Equal radius; Shift bypass; undo/redo and save/reopen.
 
 ## Scope / limitations
 Analytic intersections are implemented for finite segments and circular

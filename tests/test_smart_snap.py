@@ -240,3 +240,48 @@ def test_affine_prefilter_preserves_candidates_with_skewed_projection():
             assert actual is not None
             assert actual[1] == expected[1]
             assert np.allclose(actual[0],expected[0])
+
+
+def test_parallel_direction_uses_awakened_line():
+    sk=Sketch()
+    a,b=sk.add_point(10,10),sk.add_point(30,20)
+    ref=sk.add_line(a,b)
+    s=_sketcher(sk)
+    s.set_tool("line")
+    s.mouse_move(VP,*_at(s,[15,12.5]),_Ev())
+    assert ref in s._wake_entities
+    _click(s,*_at(s,[10,40]))
+    x,y=_at(s,[26,48],0,2)
+    s.mouse_move(VP,x,y,_Ev())
+    assert s._direction_infer==("parallel",ref)
+    s.mouse_press(VP,x,y,_Ev())
+    assert any(t=="parallel" and r[1]==ref for t,r in _cons(s))
+
+
+def test_direction_targets_perpendicular_and_equal_length():
+    sk = Sketch()
+    a,b = sk.add_point(0,0),sk.add_point(10,5)
+    ref = sk.add_line(a,b)
+    anchor=np.array([30.,30.])
+    screen=lambda q: np.asarray(q)*10
+    for kind, vector in (("perpendicular", [-3.,6.]), ("equal", [5.,10.])):
+        uv=anchor+vector
+        result=SS.direction_target(sk,screen,screen(uv),uv,anchor,[ref])
+        assert result is not None and result[:2] == (kind, ref)
+        assert np.allclose(result[2],uv)
+
+
+def test_equal_circle_radius_is_committed():
+    sk = Sketch()
+    c=sk.add_point(10,10)
+    ref=sk.add_circle(c,5)
+    s=_sketcher(sk)
+    s.set_tool("circle")
+    s.mouse_move(VP,*_at(s,[15,10]),_Ev())
+    assert ref in s._wake_entities
+    _click(s,*_at(s,[30,30]))
+    _click(s,*_at(s,[33,34]))
+    circles=[eid for eid,e in sk.entities.items() if e["type"]=="circle" and eid!=ref]
+    assert len(circles)==1
+    assert any(t=="equal" and set(r)=={ref,circles[0]} for t,r in _cons(s))
+    assert np.isclose(sk.radius(circles[0]), sk.radius(ref))
