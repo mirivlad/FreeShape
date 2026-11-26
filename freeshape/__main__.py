@@ -109,6 +109,7 @@ def main():
         os.environ["QT_QPA_PLATFORM"] = "xcb"
     from PySide6.QtWidgets import QApplication
     from PySide6.QtGui import QSurfaceFormat
+    from .i18n import tr
     fmt = QSurfaceFormat()
     fmt.setSamples(4)
     fmt.setDepthBufferSize(24)
@@ -138,9 +139,9 @@ def main():
     def step(text, frac):
         if splash is not None:
             splash.step(text, frac)
-    step("Loading the geometry kernel…", 0.15)
+    step(tr("Loading the geometry kernel…"), 0.15)
     from . import kernel  # noqa: F401  (the slow import: OpenCascade)
-    step("Loading the interface…", 0.6)
+    step(tr("Loading the interface…"), 0.6)
     from .ui.mainwindow import app_icon
     app.setWindowIcon(app_icon())
     from .ui.mainwindow import MainWindow
@@ -148,7 +149,7 @@ def main():
     app.processEvents()             # collect a Finder "open this file" event that arrived during start-up
     if path is None and opener.pending:
         path = opener.pending.pop(0)
-    step(f"Opening {os.path.basename(path)}…" if path else "Getting the workspace ready…", 0.8)
+    step(f"Opening {os.path.basename(path)}…" if path else tr("Getting the workspace ready…"), 0.8)
     w = MainWindow(path)
     w.show()
     opener.attach(w)
