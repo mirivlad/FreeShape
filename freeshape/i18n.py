@@ -11,7 +11,10 @@ def _short_language(value):
     return str(value or "en").split(".")[0].replace("-", "_").split("_")[0].lower()
 
 
-def current_language():
+_active_language = None
+
+
+def _preferred_language():
     """Use FREESHAPE_LANG, a stored preference, or the desktop's language."""
     override = os.environ.get("FREESHAPE_LANG", "").strip()
     if override:
@@ -24,6 +27,24 @@ def current_language():
         return _short_language(QLocale.system().name())
     except ImportError:
         return _short_language(os.environ.get("LANG", "en"))
+
+
+def current_language():
+    return _active_language if _active_language is not None else _preferred_language()
+
+
+def initialize(app):
+    """Select the language for this session; restart to change it."""
+    global _active_language
+    _active_language = _preferred_language()
+    if _active_language != "ru":
+        return
+    from PySide6.QtCore import QLibraryInfo, QTranslator
+    directory = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+    translator = QTranslator(app)
+    if translator.load("qtbase_ru", directory):
+        app.installTranslator(translator)
+        app._freeshape_qt_translator = translator
 
 
 @lru_cache(maxsize=8)

@@ -1,8 +1,9 @@
 # Translating FreeShape
 
 English is the source language. Russian is the first optional catalog.
-Translations are incremental: the home screen, main menus and selected tooltips
-are translated; many CAD dialogs and messages still use English.
+Translations are incremental: the home screen, main menus, CAD operation parameters, sketch hints,
+assembly/drawing controls, history, configuration and shortcuts are translated. Some dynamic messages
+and advanced controls remain in English.
 
 Under View -> Language, choose System language, English, or Русский. Restart
 FreeShape to apply the selection. The default is the desktop's language.
