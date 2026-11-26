@@ -111,12 +111,15 @@ def direct_targets(sk, screen, xy, exclude=(), tol=CAPTURE_PX, rectangles=None):
         if d <= tol:
             out.append((rank, d, ref, np.asarray(q)))
     for eid, e in sk.entities.items():
-        if eid in exclude or e.get("helper"):
+        if eid in exclude:
             continue
+        # A displayed helper diagonal is a valid finite curve for snapping.
+        # Only rectangle discovery excludes helpers (to avoid false rectangles).
         t = e["type"]
         if t == "line":
             a,b = sk.P(e["p1"]),sk.P(e["p2"])
-            offer((a+b)/2, ("mid", eid), 1)
+            if not e.get("helper"):
+                offer((a+b)/2, ("mid", eid), 1)
             box = np.asarray([screen(a),screen(b)])
         elif t in ("circle","arc"):
             c,r = sk.P(e["c"]),sk.radius(eid)

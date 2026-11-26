@@ -78,7 +78,7 @@ COPYRIGHT
 
 cat > "$STAGE/DEBIAN/control" <<CONTROL
 Package: freeshape
-Version: $REV-4~snap1
+Version: $REV-4.snap2
 Section: graphics
 Priority: optional
 Architecture: $ARCH
@@ -92,7 +92,7 @@ CONTROL
 
 # Keep payload ownership normal even when invoked by an unprivileged user.
 mkdir -p dist
-OUT="$ROOT/dist/freeshape_${REV}-4~snap1_${ARCH}.deb"
+OUT="$ROOT/dist/freeshape_${REV}-4.snap2_${ARCH}.deb"
 dpkg-deb --build --root-owner-group "$STAGE" "$OUT"
 echo "[FreeShape] Built $OUT"
 dpkg-deb --field "$OUT" Package Version Architecture

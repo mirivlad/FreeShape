@@ -120,3 +120,50 @@ def test_screen_pixel_tolerance():
     screen=lambda q:np.asarray(q)*10
     assert SS.axis_distance(screen,src,[100,5],"H")==5
     assert SS.axis_distance(screen,src,[1000,5],"H")==5
+
+
+def test_helper_diagonal_circle_intersection_line_start():
+    sk=Sketch()
+    a,b=sk.add_point(10,10),sk.add_point(50,50)
+    diag=sk.add_line(a,b,True)
+    sk.entities[diag]["helper"]=True
+    c=sk.add_point(30,30)
+    sk.add_constraint("midpoint",c,diag)
+    cid=sk.add_circle(c,10)
+    sk.add_constraint("fix",a,value=[10,10])
+    sk.add_constraint("fix",b,value=[50,50])
+    radius=sk.add_constraint("radius",cid,value=10)
+    s=_sketcher(sk)
+    s.set_tool("line")
+    q=np.array([30.,30.])+10/np.sqrt(2)
+    before=sk.to_dict()
+    x,y=_at(s,q,2,-1)
+    s.mouse_move(VP,x,y,_Ev())
+    assert s.snap_info[0]=="intersection"
+    assert set(s.snap_info[1])=={diag,cid}
+    assert set(s._snap_sources)=={diag,cid}
+    assert sk.to_dict()==before
+    s.mouse_press(VP,x,y,_Ev())
+    p=s.chain_anchor
+    assert p is not None
+    assert {r[1] for t,r in _cons(s) if t=="point_on" and r[0]==p}=={diag,cid}
+    assert np.allclose(sk.P(p),q)
+    _click(s,*_at(s,[50,65]))
+    radius["value"]=15
+    assert sk.solve()
+    expected=np.array([30.,30.])+15/np.sqrt(2)
+    assert np.allclose(sk.P(p),expected,atol=1e-5)
+    assert Sketch.from_dict(sk.to_dict()).solve()
+
+
+def test_helper_diagonal_arc_intersection_rejects_extended_arc():
+    sk=Sketch()
+    a,b=sk.add_point(10,10),sk.add_point(50,50)
+    diag=sk.add_line(a,b,True)
+    sk.entities[diag]["helper"]=True
+    c=sk.add_point(30,30)
+    p1,p2=sk.add_point(40,30),sk.add_point(30,40)
+    aid=sk.add_arc(c,p1,p2)
+    crossings=SS.crossings(sk,diag,aid)
+    assert len(crossings)==1
+    assert np.allclose(crossings[0],np.array([30.,30.])+10/np.sqrt(2))

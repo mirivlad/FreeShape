@@ -38,7 +38,7 @@ jobs:
       - name: Test translation catalog
         run: |
           python -m compileall -q freeshape
-          QT_QPA_PLATFORM=offscreen FREESHAPE_LANG=en python -m pytest -q tests/test_i18n.py tests/test_sketch_inference.py tests/test_sketch_snap.py tests/test_smart_snap.py tests/test_sketch_quick_tools.py tests/test_sketch_more_tools.py tests/test_normal_constraint.py
+          QT_QPA_PLATFORM=offscreen FREESHAPE_LANG=en python -m pytest -q tests/test_i18n.py tests/test_sketch_inference.py tests/test_sketch_snap.py tests/test_smart_snap.py tests/test_keyboard_layout.py tests/test_sketch_quick_tools.py tests/test_sketch_more_tools.py tests/test_normal_constraint.py
       - name: Build DEB and verify its contents
         run: |
           PYTHON=python bash packaging/linux/build_deb.sh
@@ -97,11 +97,11 @@ jobs:
           set -euo pipefail
           cd dist
           sha256sum freeshape_*.deb > SHA256SUMS
-          TAG=v2.6.0-4-snap1
+          TAG=v2.6.0-4-snap2
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Experimental release already exists; increment the revision for a new build."
             exit 1
           fi
           gh release create "$TAG" freeshape_*.deb SHA256SUMS \
-            --target "$GITHUB_SHA" --title "FreeShape 2.6.0-4~snap1 — Advanced Sketch Inferencing" \
-            --prerelease --latest=false --notes "Experimental fork build for desktop testing. Smart snap markers, midpoint/centre/quadrant/intersection targets, alignment guides, automatic line relationships and equal radius. View → Smart snapping to configure; hold Shift to bypass. Includes Russian UI. Back up projects before experimenting. Not a stable release. See docs/SMART_SNAPPING.md for scope and test cases."
+            --target "$GITHUB_SHA" --title "FreeShape 2.6.0-4.snap2 — Advanced Sketch Inferencing" \
+            --prerelease --latest=false --notes "Experimental fork build for desktop testing. Smart snap markers, midpoint/centre/quadrant/intersection targets, alignment guides, automatic line relationships and equal radius. View → Smart snapping to configure; hold Shift to bypass. Includes Russian UI. Fixes helper-diagonal intersections and layout-independent CAD shortcuts. Back up projects before experimenting. Not a stable release. See docs/SMART_SNAPPING.md for scope and test cases."

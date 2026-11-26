@@ -33,3 +33,7 @@ tool. Relation inference is limited to ordinary line/circle construction.
 The arc midpoint constraint extends the solver; avoid opening experimental
 files containing this constraint in older FreeShape builds. Back up files.
 Headless tests do not validate visual appearance or GPU interaction.
+
+### snap2 corrections
+
+Helper diagonals participate in finite intersection candidates, so a point placed at a circle/diagonal crossing receives both point-on constraints. Rectangle discovery continues to ignore helper edges. Keyboard bindings use Qt PortableText; Linux XKB letter shortcuts use physical key positions, with Russian logical aliases as fallback. Text editors are not intercepted. Native layout switching needs desktop verification.

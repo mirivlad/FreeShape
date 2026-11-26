@@ -18,6 +18,7 @@ from ..sketch import Sketch, ORIGIN, DIMENSIONS, CONSTRAINT_LABELS
 from . import theme
 from . import boxsel
 from . import smart_snap as SS
+from .keyboard import normalized_key
 from .icons import CONSTRAINT_GLYPHS
 from .numparse import parse_number, fmt, has_vars
 from .. import sketch_ops as OPS
@@ -1033,7 +1034,7 @@ class Sketcher:
             self.selection = []
 
     def key_press(self, vp, e) -> bool:
-        k = e.key()
+        k = normalized_key(e)
         if k == Qt.Key_Escape:
             self.escape()
             return True
@@ -1049,7 +1050,10 @@ class Sketcher:
             return True
         if e.modifiers() & Qt.ControlModifier:
             if k == Qt.Key_Z:
-                self.undo()
+                if e.modifiers() & Qt.ShiftModifier:
+                    self.redo()
+                else:
+                    self.undo()
                 return True
             if k == Qt.Key_Y:
                 self.redo()
