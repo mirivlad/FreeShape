@@ -22,6 +22,10 @@ def _self_test(out_path):
         from freeshape import drawing, dxf, hlr_worker, sheetmetal  # noqa: F401
         assets = os.path.join(os.path.dirname(os.path.abspath(K.__file__)), "assets", "freeshape.ico")
         ok = abs(K.volume(box) - 6000) < 1e-6 and len(m.tris) > 0 and os.path.exists(assets)
+        # Verify localization data in the frozen package, not just the source tree.
+        from freeshape.i18n import _catalog
+        if _catalog("ru").get("Save") != "Сохранить":
+            raise RuntimeError("Missing or invalid Russian UI catalog")
         msg = "OK" if ok else "FAILED: wrong result"
     except Exception as e:
         import traceback

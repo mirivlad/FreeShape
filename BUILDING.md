@@ -97,3 +97,7 @@ examples/            example documents (bracket, hinge assembly) and the scripts
 ## Tests
 
 `python -m pytest tests` runs the automatic tests (no window needed). They also run on every Mac build on GitHub.
+
+### Fork DEB releases
+
+The `mirivlad/FreeShape` fork publishes validated DEB packages and SHA-256 checksums under [GitHub Releases](https://github.com/mirivlad/FreeShape/releases). A master commit containing `[publish-deb]` requests a release after all distro checks pass; the Debian package revision must be increased before publishing another build of the same upstream version.
