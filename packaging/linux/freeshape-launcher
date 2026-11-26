@@ -1,0 +1,13 @@
+#!/bin/sh
+# Desktop entry / command-line entry point for the Debian package.
+# Use the distribution's own OpenGL driver, not a bundled graphics stack.
+if [ -z "${QT_QPA_PLATFORM:-}" ]; then
+    if [ -n "${DISPLAY:-}" ]; then
+        export QT_QPA_PLATFORM=xcb
+        export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-glx}"
+    elif [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        export QT_QPA_PLATFORM=wayland
+        export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-egl}"
+    fi
+fi
+exec /opt/freeshape/FreeShape "$@"
