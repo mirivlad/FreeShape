@@ -4,7 +4,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtGui import QKeyEvent, QKeySequence
 from PySide6.QtWidgets import QApplication, QWidget, QLineEdit
 from freeshape.ui.keyboard import normalized_key, portable_sequence, ShortcutRouter
 from test_sketch_inference import VP, _sketcher
@@ -33,10 +33,9 @@ def test_russian_logical_fallback(ru,en):
 
 
 def test_portable_sequences(monkeypatch):
-    from freeshape import i18n
     monkeypatch.setenv("FREESHAPE_LANG","ru")
     for text in ("Ctrl+Z","Ctrl+Y","Ctrl+Shift+Z","Ctrl+C","Ctrl+V","Shift+S"):
-        assert portable_sequence(text).toString(portable_sequence(text).PortableText)==text
+        assert portable_sequence(text).toString(QKeySequence.SequenceFormat.PortableText)==text
 
 
 def test_direct_sketch_undo_redo(monkeypatch):

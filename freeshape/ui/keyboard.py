@@ -27,7 +27,7 @@ _MODS = Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier | Qt.MetaModifier
 
 
 def portable_sequence(text):
-    return QKeySequence.fromString(text, QKeySequence.PortableText)
+    return QKeySequence.fromString(text, QKeySequence.SequenceFormat.PortableText)
 
 
 def normalized_key(event, platform=None):
