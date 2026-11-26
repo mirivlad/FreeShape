@@ -428,6 +428,29 @@ class MainWindow(QMainWindow):
             tm.addAction(a)
             self.theme_actions[mode] = a
         vm.addSeparator()
+        sm = submenu(vm, "Smart snapping")
+        for key, label in (("snap_enabled", "Enable snapping"),
+                           ("snap_points", "Special points"),
+                           ("snap_guides", "Alignment guides"),
+                           ("snap_relations", "Automatic relationships")):
+            action = QAction(tr(label), self)
+            action.setCheckable(True)
+            action.setChecked(self.settings.value(key, True, type=bool))
+            action.toggled.connect(lambda checked, k=key: self._set_snap_option(k, checked))
+            sm.addAction(action)
+        sensitivity = submenu(sm, "Snap sensitivity")
+        snap_group = QActionGroup(self)
+        for px in (6, 9, 13):
+            action = QAction(tr({6: "Low", 9: "Medium", 13: "High"}[px]), self)
+            action.setCheckable(True)
+            action.setChecked(self.settings.value("snap_radius", 9, type=int) == px)
+            action.triggered.connect(lambda _=False, v=px: self._set_snap_option("snap_radius", v))
+            snap_group.addAction(action)
+            sensitivity.addAction(action)
+        sm.addSeparator()
+        hint = sm.addAction(tr("Hold Shift to temporarily disable snapping"))
+        hint.setEnabled(False)
+        vm.addSeparator()
         lang_menu = submenu(vm, "Language")
         lang_group = QActionGroup(self)
         selected_language = str(self.settings.value("language", "system"))
@@ -662,6 +685,19 @@ class MainWindow(QMainWindow):
             a.setChecked(self.SELECT_DEFAULTS[k])
             a.blockSignals(False)
         self._selection_filter_changed()
+
+    def _set_snap_option(self, key, value):
+        self.settings.setValue(key, value)
+        self.settings.sync()
+        self._apply_snap_options()
+
+    def _apply_snap_options(self):
+        sketcher = getattr(self, "sketcher", None)
+        if sketcher is None:
+            return
+        for key in ("snap_enabled", "snap_points", "snap_guides", "snap_relations"):
+            setattr(sketcher, key, self.settings.value(key, True, type=bool))
+        sketcher.snap_radius = float(self.settings.value("snap_radius", 9, type=int))
 
     def _set_language_preference(self, language):
         self.settings.setValue("language", language)
@@ -1660,6 +1696,7 @@ class MainWindow(QMainWindow):
             return
         sk = Sketch.from_dict(feat["params"]["sketch"])
         self.sketcher = Sketcher(plane, sk, feat["id"], self._sketch_changed, self._sketch_tool_changed)
+        self._apply_snap_options()
         self.sketcher.variables = dict(ctx["base"].vars)
         self.sketcher.variable_kinds = dict(getattr(ctx["base"], "var_kinds", {}))
         self.sketcher.on_new_variable = self._sketch_new_variable

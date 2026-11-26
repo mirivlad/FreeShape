@@ -123,6 +123,11 @@ class Sketcher:
         self.on_change = on_change
         self.on_tool_changed = on_tool_changed
         self.tool = "select"
+        self.snap_enabled = True
+        self.snap_points = True
+        self.snap_guides = True
+        self.snap_relations = True
+        self.snap_radius = SS.CAPTURE_PX
         self.construction = False
         self.selection: list = []          # ids of points / entities / constraints
         self.hover = None
@@ -168,6 +173,7 @@ class Sketcher:
         self._snap_sources = []
         self._direction_infer = None
         self._equal_circle = None
+        self._click_inferences = []
 
     def set_tool(self, tool):
         self._end_editor()
@@ -179,6 +185,8 @@ class Sketcher:
             keep = list(self.selection) if (tool in CONSTRAINT_TOOLS or tool in PICK_FIRST_TOOLS) else []
         self.tool = tool
         self._reset_tool_state()
+        self.snap_info = None
+        self.cursor_uv = None
         self.cons_picks = keep if tool in CONSTRAINT_TOOLS else []
         self.selection = keep
         if self.on_tool_changed:
@@ -310,7 +318,7 @@ class Sketcher:
         self._snap_sources = []
         self._direction_infer = None
         self._equal_circle = None
-        if getattr(self, "_snap_disabled", False):
+        if getattr(self, "_snap_disabled", False) or not self.snap_enabled:
             return uv, None
         if uv is None:
             return None, None
@@ -322,7 +330,7 @@ class Sketcher:
             return np.array(self.sk.points[h[1]]), h
         screen = lambda q: self.scr(vp, q)
         xy = np.array([x, y], float)
-        target = SS.direct_targets(self.sk, screen, xy, exclude)
+        target = SS.direct_targets(self.sk, screen, xy, exclude, self.snap_radius) if self.snap_points else None
         if target:
             q, ref = target
             self._acquire_source(ref, anchor_uv)
@@ -335,7 +343,7 @@ class Sketcher:
             m_uv, key = mp
             self.model_hover = key
             return m_uv, ("mpt", tuple(m_uv), key)
-        if self.tool == "line" and anchor_uv is not None:
+        if self.snap_relations and self.tool == "line" and anchor_uv is not None:
             tan = self._tangent_infer(vp, x, y, uv, np.asarray(anchor_uv, float), exclude)
             if tan:
                 t_uv, eid, kind = tan
@@ -355,7 +363,7 @@ class Sketcher:
             if s_uv is not None:
                 cands.append((ref, s_uv))
         pick = {}
-        for ref, s_uv in cands:
+        for ref, s_uv in cands if self.snap_guides else ():
             axis = self._axis_hit(vp, s_uv, x, y)
             if axis:
                 distance = SS.axis_distance(screen, s_uv, xy, axis)
@@ -388,7 +396,7 @@ class Sketcher:
             if SS.contains(self.sk, h[1], uv):
                 self._snap_sources = [h[1]]
                 return uv, ("on", h[1])
-        if not pick and self.tool == "line" and anchor_uv is not None:
+        if self.snap_relations and not pick and self.tool == "line" and anchor_uv is not None:
             relation = SS.direction_target(self.sk, screen, xy, uv, np.asarray(anchor_uv),
                                            self._wake_entities, exclude)
             if relation:
@@ -396,7 +404,7 @@ class Sketcher:
                 self._direction_infer = (kind, eid)
                 self._snap_sources = [eid]
                 self.infer_hits.append((np.asarray(anchor_uv), {"parallel": "∥", "perpendicular": "⊥", "equal": "="}[kind]))
-        if not pick and not h and self.tool == "circle" and self.temp:
+        if self.snap_relations and not pick and not h and self.tool == "circle" and self.temp:
             center = np.asarray(self.temp[0][0])
             d = uv - center
             length = np.linalg.norm(d)
@@ -618,7 +626,7 @@ class Sketcher:
         if np.linalg.norm(screen(src_uv) - xy) <= 12:
             return None
         d, axis = min((SS.axis_distance(screen, src_uv, xy, a), a) for a in ("H", "V"))
-        return axis if d <= SS.GUIDE_PX else None
+        return axis if d <= self.snap_radius * SS.GUIDE_PX / SS.CAPTURE_PX else None
 
     def _hit_midpoint(self, vp, x, y, exclude=()):
         best = (8.0, None)
@@ -665,6 +673,8 @@ class Sketcher:
     def _point_at(self, uv, snap, cons=None):
         """Create (or reuse) a point for a click; returns pid. `cons` are the horizontal/vertical
         inferences (from snap) to apply to a newly created point."""
+        if cons is None:
+            cons = next((cs for q, cs in reversed(self._click_inferences) if q is uv), ())
         if snap and snap[0] == "point":
             return snap[1]
         if snap and snap[0] in ("mpt", "medge"):
@@ -1255,6 +1265,8 @@ class Sketcher:
         if uv is None:
             return True
         icons = list(self._infer_cons)      # alignment inferences for the point placed by this click
+        self._click_inferences.append((uv, icons))
+        del self._click_inferences[:-512]
         self._infer_src = []
         sk = self.sk
         cons = self.construction
@@ -1663,7 +1675,9 @@ class Sketcher:
             self.push_undo()
             c = self._point_at(cu, cs)
             a = self._point_at(p1, s1)
-            b = sk.add_point(*p2) if not (s2 and s2[0] == "point") else s2[1]
+            # Only retain an external endpoint if the radius-projected point still matches it.
+            q2 = self._src_uv(s2[1]) if s2 and s2[0] == "point" else None
+            b = self._point_at(p2, s2) if q2 is not None and np.linalg.norm(q2-p2) < 1e-7 else sk.add_point(*p2)
             if self.arc_sweep < 0:
                 a, b = b, a
             aid = sk.add_arc(c, a, b, cons)
@@ -2004,7 +2018,10 @@ class Sketcher:
             _uv, snap = self.snap(vp, x, y, self.temp[0][0] if self.temp else None)
             if not self.temp:
                 self.temp = [(_uv, snap)]
+                self._first_cons = list(self._infer_cons)
                 return True
+            second_cons = list(self._infer_cons)
+            first_cons = list(self._first_cons)
             (a, sa), b = self.temp[0], _uv
             self.temp = []
             if np.linalg.norm(b - a) < 1e-9:
@@ -2012,8 +2029,8 @@ class Sketcher:
             cons = self.construction
 
             def make(width, a=a, b=b, sa=sa, sb=snap):
-                pa = self._point_at(a, sa) if sa else None
-                pb = self._point_at(b, sb) if sb else None
+                pa = self._point_at(a, sa, first_cons) if sa or first_cons else None
+                pb = self._point_at(b, sb, second_cons) if sb or second_cons else None
                 OPS.slot(self.sk, a, b, width, cons, pa, pb)
             self._prompt(vp, (a + b) / 2, "Slot width", round(max(np.linalg.norm(b - a) / 3, 1e-3), 3), make,
                          expr_target=lambda: self._last_radius_constraint(), expr_scale=0.5)
@@ -2889,6 +2906,86 @@ class Sketcher:
             GL.glVertex3f(*pl.to_world(*cur))
             GL.glEnd()
 
+    def _draw_snap_overlay(self, vp, p):
+        if self._snap_disabled or not self.snap_enabled:
+            return
+        ref = self.snap_info
+        if not ref and not self.infer_hits:
+            return
+        xy = self.scr(vp, self.cursor_uv)
+        kind = ref[0] if ref else ""
+        labels = {"mid": ("△", "Midpoint"), "intersection": ("×", "Intersection"),
+                  "quadrant": ("◇", "Quadrant"), "rect_center": ("⊕", "Rectangle centre"),
+                  "on": ("○", "Point on curve"), "tan": ("T", "Tangent"),
+                  "medge": ("○", "Point on edge"), "mpt": ("□", "Model point"),
+                  "point": ("□", "Endpoint")}
+        if kind == "point":
+            pid = ref[1]
+            if pid == ORIGIN:
+                labels["point"] = ("⊕", "Origin")
+            elif any(e.get("c") == pid for e in self.sk.entities.values()):
+                labels["point"] = ("⊕", "Curve centre")
+        if kind == "mpt":
+            typ = ref[2][2]
+            labels["mpt"] = {"mid": ("△", "Midpoint"), "centre": ("⊕", "Curve centre")}.get(typ, labels["mpt"])
+        glyph, name = labels.get(kind, ("", ""))
+        if self._direction_infer:
+            name = {"parallel": "Parallel", "perpendicular": "Perpendicular", "equal": "Equal length"}[self._direction_infer[0]]
+        elif self._equal_circle:
+            name = "Equal radius"
+        hints = {"H": "Horizontal", "V": "Vertical", "T": "Tangent",
+                 "∥": "Parallel", "⊥": "Perpendicular", "=": "Equal"}
+        names = [tr(name)] if name else []
+        for _q, code in self.infer_hits:
+            h = tr(hints.get(code, code))
+            if h not in names and code != "=":
+                names.append(h)
+        p.save()
+        gold = QColor("#e4a222")
+        p.setPen(QPen(gold, 2))
+        p.setBrush(Qt.NoBrush)
+        for eid in self._snap_sources:
+            if eid not in self.sk.entities:
+                continue
+            for poly in self.sk.polylines(eid, 40):
+                if len(poly) > 1:
+                    pts = self.scr_many(vp, poly)
+                    p.drawPolyline(QPolygonF([QPointF(float(q[0]), float(q[1])) for q in pts]))
+        for q, code in self.infer_hits:
+            if code in ("H", "V"):
+                ss = self.scr(vp, q)
+                p.drawEllipse(QRectF(float(ss[0])-4,float(ss[1])-4,8,8))
+        x,y = float(xy[0]),float(xy[1])
+        r = QRectF(x-6,y-6,12,12)
+        if glyph == "△":
+            p.drawPolygon(QPolygonF([QPointF(x,y-7),QPointF(x-7,y+6),QPointF(x+7,y+6)]))
+        elif glyph == "◇" or glyph == "×":
+            p.drawPolygon(QPolygonF([QPointF(x,y-7),QPointF(x+7,y),QPointF(x,y+7),QPointF(x-7,y)]))
+            if glyph == "×":
+                p.drawLine(QPointF(x-4,y-4),QPointF(x+4,y+4))
+                p.drawLine(QPointF(x-4,y+4),QPointF(x+4,y-4))
+        elif glyph == "□":
+            p.drawRect(r)
+        else:
+            p.drawEllipse(r)
+            p.drawLine(QPointF(x-9,y),QPointF(x+9,y))
+            p.drawLine(QPointF(x,y-9),QPointF(x,y+9))
+        label = " · ".join(names)
+        if label:
+            width = QFontMetricsF(p.font()).horizontalAdvance(label) + 14
+            rect = QRectF(x+12, y+12, width, 22)
+            window = p.viewport()
+            if rect.right() > window.right():
+                rect.moveRight(x-12)
+            if rect.bottom() > window.bottom():
+                rect.moveBottom(y-12)
+            p.setBrush(QColor("#fff5db"))
+            p.setPen(QPen(gold, 1))
+            p.drawRoundedRect(rect, 4, 4)
+            p.setPen(QColor("#513800"))
+            p.drawText(rect, Qt.AlignCenter, label)
+        p.restore()
+
     def draw_overlay(self, vp, p):
         self._dim_rects = {}
         self._glyph_rects = []
@@ -2946,15 +3043,9 @@ class Sketcher:
                     p.setPen(QColor(theme.ERROR if bad else "#374151"))
                     p.drawText(r, Qt.AlignCenter, CONSTRAINT_GLYPHS.get(t, "?"))
                     self._glyph_rects.append((r, c["id"]))
-        # ---- inference marker near cursor
-        if self.infer_hits and self.cursor_uv is not None and self.tool in DRAW_TOOLS | {"slot"}:
-            s = self.scr(vp, self.cursor_uv)
-            label = "".join(sorted({a for _u, a in self.infer_hits}))
-            r = QRectF(s[0] + 12, s[1] + 10, 16 * len(label), 16)
-            p.setPen(QPen(QColor(theme.ACCENT), 1))
-            p.setBrush(QColor("#eaf2fd"))
-            p.drawRoundedRect(r, 3, 3)
-            p.drawText(r, Qt.AlignCenter, label)
+        # ---- smart snap overlay (independent of saved constraint visibility)
+        if self.cursor_uv is not None and self.tool in DRAW_TOOLS | {"slot"}:
+            self._draw_snap_overlay(vp, p)
         # ---- live length readout while drawing
         if self.cursor_uv is not None:
             txt = None
