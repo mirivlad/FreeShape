@@ -1,0 +1,129 @@
+// Local cursor, preview and hit testing. Only committed edits go to the native Python solver.
+const $=id=>document.getElementById(id);
+const distance=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
+const sub=(a,b)=>[a[0]-b[0],a[1]-b[1]];
+const dot=(a,b)=>a[0]*b[0]+a[1]*b[1];
+const cross=(a,b)=>a[0]*b[1]-a[1]*b[0];
+const add=(a,b,t=1)=>[a[0]+b[0]*t,a[1]+b[1]*t];
+const tau=2*Math.PI;
+const wrap=a=>(a%tau+tau)%tau;
+function intersect(a,b){
+ if(a.kind==="line"&&b.kind==="line"){
+  const d=sub(a.b,a.a),e=sub(b.b,b.a),den=cross(d,e);if(Math.abs(den)<1e-10)return [];
+  return [add(a.a,d,cross(sub(b.a,a.a),e)/den)];
+ }
+ if(a.kind==="circle"&&b.kind==="line")return intersect(b,a);
+ if(a.kind==="line"&&b.kind==="circle"){
+  const d=sub(a.b,a.a),v=sub(a.a,b.c),A=dot(d,d),B=2*dot(d,v),C=dot(v,v)-b.r*b.r,D=B*B-4*A*C;
+  if(A<1e-12||D<-1e-9)return [];
+  return [...new Set([(-B+Math.sqrt(Math.max(0,D)))/(2*A),(-B-Math.sqrt(Math.max(0,D)))/(2*A)])].map(t=>add(a.a,d,t));
+ }
+ const d=sub(b.c,a.c),L=Math.hypot(...d);if(L<1e-10||L>a.r+b.r+1e-8||L<Math.abs(a.r-b.r)-1e-8)return [];
+ const u=d.map(x=>x/L),x=(a.r*a.r-b.r*b.r+L*L)/(2*L),h=Math.sqrt(Math.max(0,a.r*a.r-x*x)),p=add(a.c,u,x);
+ return [add(p,[-u[1],u[0]],h),add(p,[-u[1],u[0]],-h)];
+}
+function contains(c,q){
+ if(c.kind==="line"){const d=sub(c.b,c.a),t=dot(sub(q,c.a),d)/Math.max(dot(d,d),1e-20);return t>=-1e-7&&t<=1+1e-7;}
+ if(c.arc){const t=wrap(Math.atan2(q[1]-c.c[1],q[0]-c.c[0])-c.arc[0]);return t<=c.arc[1]+1e-7||t>=tau-1e-7;}
+ return true;
+}
+function project(c,q){
+ if(c.kind==="line"){const d=sub(c.b,c.a);return add(c.a,d,Math.max(0,Math.min(1,dot(sub(q,c.a),d)/Math.max(dot(d,d),1e-20))));}
+ const v=sub(q,c.c),L=Math.hypot(...v);return L>1e-12?add(c.c,v,c.r/L):add(c.c,[1,0],c.r);
+}
+export class SketchEditor {
+ constructor(send,finish,status){
+  this.send=send;this.finish=finish;this.status=status;this.canvas=$("sketch-canvas");this.ctx=this.canvas.getContext("2d");
+  this.active=false;this.busy=false;this.tool="select";this.anchors=[];this.selection=new Set();this.scale=8;this.center=[0,0];this.mouse=null;this.pan=null;this.state=null;
+  this.canvas.addEventListener("contextmenu",e=>e.preventDefault());
+  this.canvas.addEventListener("pointerdown",e=>this.down(e));
+  this.canvas.addEventListener("pointermove",e=>this.move(e));
+  this.canvas.addEventListener("pointerup",()=>{this.pan=null;});
+  this.canvas.addEventListener("pointercancel",()=>{this.pan=null;});
+  this.canvas.addEventListener("wheel",e=>this.wheel(e),{passive:false});
+  new ResizeObserver(()=>{if(this.active)this.resize();}).observe(this.canvas);
+  for(const b of document.querySelectorAll("[data-tool]"))b.onclick=()=>this.setTool(b.dataset.tool);
+  for(const b of document.querySelectorAll("[data-constraint]"))b.onclick=()=>this.constraint(b.dataset.constraint);
+  $("sk-delete").onclick=()=>this.remove();
+  $("sk-undo").onclick=()=>this.change("sketch_undo");
+  $("sk-fit").onclick=()=>this.fit();
+  $("sk-finish").onclick=()=>this.end("sketch_finish");
+  $("sk-cancel").onclick=()=>this.end("sketch_cancel");
+  window.addEventListener("keydown",e=>{
+   if(!this.active||e.target.matches("input,textarea,select"))return;
+   const keys={KeyL:"line",KeyR:"rect",KeyC:"circle",KeyA:"arc",KeyP:"point",Escape:"select"};
+   if(e.ctrlKey&&e.code==="KeyZ"){e.preventDefault();this.change("sketch_undo");}
+   else if(e.code==="Delete"){e.preventDefault();this.remove();}
+   else if(!e.ctrlKey&&!e.altKey&&!e.metaKey&&keys[e.code]){e.preventDefault();this.setTool(keys[e.code]);}
+  });
+ }
+ show(s){this.active=true;this.state=s;this.anchors=[];this.selection.clear();this.mouse=null;this.center=[0,0];this.scale=8;
+  $("sketch-canvas").hidden=false;$("sketch-tools").hidden=false;$("sketch-panel").hidden=false;$("model-panel").hidden=true;$("view-controls").hidden=true;
+  this.setTool("select");this.resize();this.fit();this.updateInfo();}
+ hide(){this.active=false;this.state=null;this.anchors=[];this.selection.clear();$("sketch-canvas").hidden=true;$("sketch-tools").hidden=true;$("sketch-panel").hidden=true;$("model-panel").hidden=false;$("view-controls").hidden=false;}
+ resize(){const r=this.canvas.getBoundingClientRect();this.w=Math.max(1,r.width);this.h=Math.max(1,r.height);const d=Math.min(devicePixelRatio,2);this.canvas.width=Math.round(this.w*d);this.canvas.height=Math.round(this.h*d);this.ctx.setTransform(d,0,0,d,0,0);this.draw();}
+ screen(q){return [this.w/2+(q[0]-this.center[0])*this.scale,this.h/2-(q[1]-this.center[1])*this.scale];}
+ uv(p){return [this.center[0]+(p[0]-this.w/2)/this.scale,this.center[1]-(p[1]-this.h/2)/this.scale];}
+ eventPos(e){const r=this.canvas.getBoundingClientRect();return [e.clientX-r.left,e.clientY-r.top];}
+ fit(){const pts=Object.values(this.state?.draft.points||{});if(pts.length>1){const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]),a=Math.min(...xs),b=Math.max(...xs),c=Math.min(...ys),d=Math.max(...ys);this.center=[(a+b)/2,(c+d)/2];this.scale=Math.min(this.w/Math.max(b-a,10),this.h/Math.max(d-c,10))*.72;}else {this.center=[0,0];this.scale=Math.min(this.w,this.h)/100;}this.draw();}
+ setTool(t){if(this.busy)return;this.tool=t;this.anchors=[];this.mouse=null;for(const b of document.querySelectorAll("[data-tool]"))b.classList.toggle("active",b.dataset.tool===t);this.draw();}
+ curves(){const {points,entities}=this.state.draft,out=[];for(const [id,e] of Object.entries(entities)){
+  if(e.type==="line"){out.push({id,kind:"line",a:points[e.p1],b:points[e.p2]});}
+  else if(e.type==="circle"||e.type==="arc"){const c=points[e.c],r=e.type==="circle"?e.r:distance(c,points[e.p1]);const obj={id,kind:"circle",c,r};if(e.type==="arc"){const a=Math.atan2(points[e.p1][1]-c[1],points[e.p1][0]-c[0]),b=Math.atan2(points[e.p2][1]-c[1],points[e.p2][0]-c[0]);obj.arc=[a,wrap(b-a)];}out.push(obj);}
+ }return out;}
+ snap(q,shift=false){
+  if(shift)return {uv:q};
+  const {points}=this.state.draft,tol=9/this.scale,cands=[],curves=this.curves(),near=[];
+  const offer=(p,ref,label,rank=1)=>{const d=distance(q,p);if(d<=tol)cands.push({uv:p,ref,label,rank,d});};
+  for(const [id,p] of Object.entries(points))offer(p,{kind:"point",id},id==="origin"?"Начало координат":"Точка",0);
+  for(const c of curves){
+   const p=project(c,q);if(contains(c,p)&&distance(q,p)<=tol){near.push(c);offer(p,{kind:"on",id:c.id},"Точка на кривой",6);}
+   if(c.kind==="line")offer(add(c.a,sub(c.b,c.a),.5),{kind:"mid",id:c.id},"Середина",2);
+   else {
+    if(c.arc){const a=c.arc[0]+c.arc[1]/2;offer(add(c.c,[Math.cos(a),Math.sin(a)],c.r),{kind:"mid",id:c.id},"Середина дуги",2);}
+    for(const [x,y] of [[1,0],[-1,0],[0,1],[0,-1]]){const p=add(c.c,[x,y],c.r);if(contains(c,p))offer(p,{kind:"quadrant",id:c.id,axis:y?"vertical":"horizontal"},"Квадрант",3);}
+   }
+  }
+  for(let i=0;i<near.length;i++)for(let j=i+1;j<near.length;j++)for(const p of intersect(near[i],near[j]))if(contains(near[i],p)&&contains(near[j],p))offer(p,{kind:"intersection",ids:[near[i].id,near[j].id]},"Пересечение",1);
+  // Specific points win over a generic point-on-curve within the capture radius.
+  const exact=cands.filter(c=>c.rank<6).sort((a,b)=>a.rank-b.rank||a.d-b.d)[0];
+  if(exact)return exact;
+  const a=this.anchors.at(-1);if(a&&this.tool==="line"){
+   if(Math.abs(q[1]-a.uv[1])<=tol) return {uv:[q[0],a.uv[1]],label:"Горизонталь",guide:a.uv};
+   if(Math.abs(q[0]-a.uv[0])<=tol) return {uv:[a.uv[0],q[1]],label:"Вертикаль",guide:a.uv};
+  }
+  return cands.sort((a,b)=>a.d-b.d)[0]||{uv:q};
+ }
+ pick(q){let best=null;for(const [id,paths] of Object.entries(this.state.curves)){for(const path of paths)for(let i=1;i<path.length;i++){const a=path[i-1],b=path[i],d=sub(b,a),p=add(a,d,Math.max(0,Math.min(1,dot(sub(q,a),d)/Math.max(dot(d,d),1e-20)))),dist=distance(p,q);if(dist<7/this.scale&&(!best||dist<best.dist))best={id,dist};}}
+  for(const [id,e] of Object.entries(this.state.draft.entities))if(e.type==="point"){const dist=distance(q,this.state.draft.points[e.p]);if(dist<7/this.scale&&(!best||dist<best.dist))best={id,dist};}return best?.id;}
+ down(e){if(!this.active)return;const p=this.eventPos(e);if(e.button===1||e.button===2){this.pan={p,center:[...this.center]};this.canvas.setPointerCapture(e.pointerId);e.preventDefault();return;}if(e.button!==0||this.busy)return;const q=this.uv(p);
+  if(this.tool==="select"){const id=this.pick(q);if(!e.shiftKey)this.selection.clear();if(id){if(this.selection.has(id))this.selection.delete(id);else this.selection.add(id);}this.updateInfo();this.draw();return;}
+  const hit=this.snap(q,e.shiftKey);this.anchors.push({uv:hit.uv,ref:hit.ref});const count=this.tool==="point"?1:this.tool==="arc"?3:2;
+  if(this.anchors.length===count){const tool=this.tool,points=this.anchors;this.anchors=[];this.change("sketch_draw",{tool,points,construction:$("construction").checked});}else this.draw();
+ }
+ move(e){if(!this.active)return;const p=this.eventPos(e);if(this.pan){this.center=[this.pan.center[0]-(p[0]-this.pan.p[0])/this.scale,this.pan.center[1]+(p[1]-this.pan.p[1])/this.scale];this.draw();return;}this.mouse=this.snap(this.uv(p),e.shiftKey);this.draw();}
+ wheel(e){e.preventDefault();const p=this.eventPos(e),before=this.uv(p);this.scale=Math.max(.02,Math.min(10000,this.scale*Math.exp(-e.deltaY*.0015)));const after=this.uv(p);this.center=add(this.center,sub(before,after));this.draw();}
+ async change(op,args={}){if(!this.active||this.busy)return;this.busy=true;this.updateInfo();try{this.state=await this.send(op,args);this.selection.clear();this.mouse=null;this.draw();}catch(e){this.status(String(e));}finally{this.busy=false;this.updateInfo();}}
+ constraint(kind){const refs=[...this.selection];if(!refs.length){this.status("Выберите геометрию (Shift — несколько объектов)");return;}const args={kind,refs};if(kind==="distance"||kind==="radius"){const v=Number($("sk-value").value);if(!(v>0)){this.status("Укажите положительный размер");return;}args.value=v;}this.change("sketch_constraint",args);}
+ remove(){if(this.selection.size)this.change("sketch_delete",{ids:[...this.selection]});}
+ async end(op){if(this.busy)return;this.busy=true;try{const result=await this.send(op);this.hide();this.finish(result);}catch(e){this.status(String(e));}finally{this.busy=false;this.updateInfo();}}
+ updateInfo(){if(!this.active)return;const s=this.state;$("sk-info").textContent=Object.keys(s.draft.entities).length+" объектов · степеней свободы: "+(s.dof??"—")+" · выбрано: "+this.selection.size;
+  $("sk-constraints").replaceChildren(...s.draft.constraints.map(c=>{const div=document.createElement("div");div.textContent=c.type+(c.value!==undefined?" = "+c.value:"")+" · "+c.refs.join(", ");return div;}));$("sk-undo").disabled=this.busy||!s.undo;$("sk-finish").disabled=this.busy;$("sk-cancel").disabled=this.busy;
+ }
+ line(a,b,color,width=1,dash=[]){const c=this.ctx,p=this.screen(a),q=this.screen(b);c.beginPath();c.setLineDash(dash);c.strokeStyle=color;c.lineWidth=width;c.moveTo(...p);c.lineTo(...q);c.stroke();c.setLineDash([]);}
+ draw(){if(!this.active||!this.state||!this.w)return;const c=this.ctx;c.fillStyle="#f6f8fb";c.fillRect(0,0,this.w,this.h);
+  const step=Math.pow(10,Math.floor(Math.log10(55/this.scale)));const spacing=step*this.scale<18?step*5:step;const lo=this.uv([0,this.h]),hi=this.uv([this.w,0]);
+  for(let x=Math.ceil(lo[0]/spacing)*spacing;x<=hi[0];x+=spacing)this.line([x,lo[1]],[x,hi[1]],"#e0e6ef");
+  for(let y=Math.ceil(lo[1]/spacing)*spacing;y<=hi[1];y+=spacing)this.line([lo[0],y],[hi[0],y],"#e0e6ef");
+  this.line([lo[0],0],[hi[0],0],"#c78383");this.line([0,lo[1]],[0,hi[1]],"#79ad87");
+  const {entities,points}=this.state.draft;
+  const highlighted=new Set(this.mouse?.ref?.ids||[this.mouse?.ref?.id]);
+  for(const [id,paths] of Object.entries(this.state.curves)){const e=entities[id];c.strokeStyle=this.selection.has(id)?"#e89116":highlighted.has(id)?"#dca527":"#20549c";c.lineWidth=this.selection.has(id)||highlighted.has(id)?2.6:1.8;c.setLineDash(e.construction?[6,4]:[]);
+   for(const path of paths){if(!path.length)continue;c.beginPath();c.moveTo(...this.screen(path[0]));for(const p of path.slice(1))c.lineTo(...this.screen(p));c.stroke();}c.setLineDash([]);
+  }
+  for(const [id,p] of Object.entries(points)){const q=this.screen(p);c.fillStyle=id==="origin"?"#b84545":"#2464ac";c.beginPath();c.arc(...q,id==="origin"?4:3,0,tau);c.fill();}
+  const a=this.anchors[0]?.uv,b=this.mouse?.uv;
+  if(a&&b){const color="#4186d4",dash=[5,4];if(this.tool==="rect"){const p=[b[0],a[1]],q=[a[0],b[1]];for(const [x,y] of [[a,p],[p,b],[b,q],[q,a]])this.line(x,y,color,1.5,dash);}else if(this.tool==="circle"){c.strokeStyle=color;c.setLineDash(dash);c.beginPath();c.arc(...this.screen(a),distance(a,b)*this.scale,0,tau);c.stroke();c.setLineDash([]);}else {this.line(this.anchors.at(-1).uv,b,color,1.5,dash);if(this.anchors.length===2)this.line(a,this.anchors[1].uv,color,1.5,dash);}}
+  if(this.mouse?.label&&this.tool!=="select"){const q=this.screen(b);if(this.mouse.guide)this.line(this.mouse.guide,b,"#dca527",1,[4,4]);c.strokeStyle="#dca527";c.lineWidth=2;c.beginPath();c.moveTo(q[0]-6,q[1]);c.lineTo(q[0],q[1]-6);c.lineTo(q[0]+6,q[1]);c.lineTo(q[0],q[1]+6);c.closePath();c.stroke();c.font="12px system-ui";const w=c.measureText(this.mouse.label).width+12,x=Math.min(q[0]+12,this.w-w-4),y=Math.min(q[1]+12,this.h-23);c.fillStyle="#fff5d9";c.fillRect(x,y,w,22);c.fillStyle="#76530b";c.fillText(this.mouse.label,x+6,y+15);}
+ }
+}
