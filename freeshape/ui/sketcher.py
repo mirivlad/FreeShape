@@ -174,6 +174,7 @@ class Sketcher:
         self._direction_infer = None
         self._equal_circle = None
         self._click_inferences = []
+        self._rectangle_snap_cache = None
 
     def set_tool(self, tool):
         self._end_editor()
@@ -227,6 +228,7 @@ class Sketcher:
         self.on_change(True)
 
     def changed(self, final=True):
+        self._rectangle_snap_cache = None
         self.sk.solve()
         self.on_change(final)
 
@@ -330,7 +332,14 @@ class Sketcher:
             return np.array(self.sk.points[h[1]]), h
         screen = lambda q: self.scr(vp, q)
         xy = np.array([x, y], float)
-        target = SS.direct_targets(self.sk, screen, xy, exclude, self.snap_radius) if self.snap_points else None
+        if self.snap_points and self._rectangle_snap_cache is None:
+            self._rectangle_snap_cache = list(SS.rectangle_centres(self.sk))
+        target = SS.direct_targets(self.sk, screen, xy, exclude, self.snap_radius,
+                                   self._rectangle_snap_cache) if self.snap_points else None
+        if target and self.snap_relations and self.tool == "line" and anchor_uv is not None and target[1][0] == "quadrant":
+            tangent = self._tangent_infer(vp, x, y, uv, np.asarray(anchor_uv, float), exclude)
+            if tangent and np.linalg.norm(screen(tangent[0])-xy) < np.linalg.norm(screen(target[0])-xy):
+                target = None
         if target:
             q, ref = target
             self._acquire_source(ref, anchor_uv)
@@ -404,6 +413,7 @@ class Sketcher:
                 self._direction_infer = (kind, eid)
                 self._snap_sources = [eid]
                 self.infer_hits.append((np.asarray(anchor_uv), {"parallel": "∥", "perpendicular": "⊥", "equal": "="}[kind]))
+                return uv, None
         if self.snap_relations and not pick and not h and self.tool == "circle" and self.temp:
             center = np.asarray(self.temp[0][0])
             d = uv - center
@@ -421,6 +431,7 @@ class Sketcher:
                     _, self._equal_circle, uv = min(choices, key=lambda a: (a[0], a[1]))
                     self._snap_sources = [self._equal_circle]
                     self.infer_hits.append((center, "="))
+                    return uv, None
         me = self._model_edge_hit(vp, x, y) if not pick else (
             self._model_edge_on_guide(vp, x, y, uv, pick) if len(pick) == 1 else None)
         if me:
@@ -1677,7 +1688,7 @@ class Sketcher:
             a = self._point_at(p1, s1)
             # Only retain an external endpoint if the radius-projected point still matches it.
             q2 = self._src_uv(s2[1]) if s2 and s2[0] == "point" else None
-            b = self._point_at(p2, s2) if q2 is not None and np.linalg.norm(q2-p2) < 1e-7 else sk.add_point(*p2)
+            b = s2[1] if q2 is not None else sk.add_point(*p2)
             if self.arc_sweep < 0:
                 a, b = b, a
             aid = sk.add_arc(c, a, b, cons)
@@ -2925,6 +2936,12 @@ class Sketcher:
                 labels["point"] = ("⊕", "Origin")
             elif any(e.get("c") == pid for e in self.sk.entities.values()):
                 labels["point"] = ("⊕", "Curve centre")
+            elif any(c["type"] == "midpoint" and c["refs"][0] == pid
+                     and self.sk.entities.get(c["refs"][1], {}).get("helper")
+                     for c in self.sk.constraints):
+                labels["point"] = ("⊕", "Rectangle centre")
+            elif any(c["type"] == "midpoint" and c["refs"][0] == pid for c in self.sk.constraints):
+                labels["point"] = ("△", "Midpoint")
         if kind == "mpt":
             typ = ref[2][2]
             labels["mpt"] = {"mid": ("△", "Midpoint"), "centre": ("⊕", "Curve centre")}.get(typ, labels["mpt"])

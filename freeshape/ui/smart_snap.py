@@ -103,7 +103,7 @@ def rectangle_centres(sk):
                         yield (p[0]+p[2])/2, (a,c), ids
 
 
-def direct_targets(sk, screen, xy, exclude=(), tol=CAPTURE_PX):
+def direct_targets(sk, screen, xy, exclude=(), tol=CAPTURE_PX, rectangles=None):
     xy = np.asarray(xy, float)
     out, nearby = [], []
     def offer(q, ref, rank):
@@ -140,7 +140,7 @@ def direct_targets(sk, screen, xy, exclude=(), tol=CAPTURE_PX):
     for a,b in combinations(nearby,2):
         for q in crossings(sk,a,b):
             offer(q,("intersection",(a,b),tuple(q)),0)
-    for q, diagonal, ids in rectangle_centres(sk):
+    for q, diagonal, ids in (rectangle_centres(sk) if rectangles is None else rectangles):
         if not any(i in exclude for i in ids):
             offer(q,("rect_center",diagonal,ids),1)
     if not out:
