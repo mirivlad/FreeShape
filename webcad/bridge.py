@@ -1,5 +1,6 @@
 """Thin browser adapter to the original FreeShape kernel."""
 import base64
+import copy
 import json
 import math
 import pathlib
@@ -10,6 +11,7 @@ from freeshape.document import Document
 from freeshape.sketch import Sketch
 
 doc = None
+draft = None
 
 
 def demo():
@@ -41,9 +43,12 @@ def summary(d):
         m = K.tessellate(p.shape)
         meshes.append({"id": p.id, "vertices": m.verts.ravel().tolist(),
                        "normals": m.normals.ravel().tolist(), "triangles": m.tris.ravel().tolist(),
+                       "tri_face": m.tri_face.tolist(),
                        "edges": [e.ravel().tolist() for e in m.edge_polys]})
-    return {"name": d.name, "features": [{"id": f["id"], "name": f.get("name", f["type"]),
+    return {"name": d.name, "undo": d.can_undo(), "redo": d.can_redo(), "features": [{"id": f["id"], "name": f.get("name", f["type"]),
             "type": f["type"], "depth": f.get("params", {}).get("depth"),
+            "params": {k: v for k, v in f.get("params", {}).items() if k in ("depth", "radius", "distance", "op", "end", "flip", "angle")},
+            "regions": len(d.state.sketches[f["id"]].regions) if f["id"] in d.state.sketches else 0,
             "suppressed": f.get("suppressed", False)} for f in d.features],
             "errors": d.errors, "meshes": meshes,
             "volume": sum(float(K.volume(p.shape)) for p in d.state.parts.values())}
@@ -59,29 +64,289 @@ def open_document(content):
     return Document.from_dict(d)
 
 
+def number(value, minimum=None):
+    n = float(value)
+    if not math.isfinite(n) or abs(n) > 1000000 or (minimum is not None and n < minimum):
+        raise ValueError("Invalid numeric value")
+    return n
+
+
+def transaction(fn):
+    """Keep native undo history; roll back a failed feature edit."""
+    before = doc._snapshot()
+    undo, redo, dirty = list(doc._undo), list(doc._redo), doc.dirty
+    previous = set(doc.errors)
+    try:
+        fn()
+        bad = set(doc.errors) - previous
+        if bad:
+            raise ValueError(str({k: doc.errors[k] for k in bad}))
+    except Exception:
+        doc._restore(before)
+        doc._undo, doc._redo, doc.dirty = undo, redo, dirty
+        doc.rebuild()
+        raise
+
+
+def subref(pick, kind):
+    part = doc.state.parts[pick["part"]]
+    seq = K.faces(part.shape) if kind == "face" else K.edges(part.shape)
+    idx = int(pick["index"])
+    if not 0 <= idx < len(seq):
+        raise ValueError("Invalid selection")
+    return part, seq[idx], F.make_ref(part.id, seq[idx], kind, part.shape)
+
+
+def sketch_view():
+    s = draft["sketch"]
+    return {"draft": s.to_dict(), "plane": draft["plane"], "id": draft["id"],
+            "dof": s.status.get("dof"), "bad": list(s.status.get("bad", [])),
+            "curves": {eid: [q.tolist() for q in s.polylines(eid, 80)]
+                       for eid in s.entities if s.entities[eid]["type"] not in ("image", "text")},
+            "undo": bool(draft["undo"])}
+
+
+def begin_sketch(req):
+    global draft
+    fid = req.get("id")
+    if fid:
+        f = doc.feature(fid)
+        if f["type"] != "sketch":
+            raise ValueError("Select a sketch")
+        s = Sketch.from_dict(f["params"]["sketch"])
+        plane = copy.deepcopy(f["params"]["plane"])
+    else:
+        if req.get("face"):
+            part, face, ref = subref(req["face"], "face")
+            pl = K.planar_face_plane(face)
+            if pl is None:
+                raise ValueError("Sketch needs a planar face")
+            plane = {"kind": "face", "face": ref, "origin": pl.origin.tolist(), "xdir": pl.xdir.tolist()}
+        else:
+            name = req.get("plane", "Top")
+            if name not in ("Top", "Front", "Right"):
+                raise ValueError("Unknown sketch plane")
+            plane = {"kind": "std", "name": name}
+        s = Sketch()
+    s.solve()
+    draft = {"id": fid, "plane": plane, "sketch": s, "undo": []}
+    return sketch_view()
+
+
+def point_at(s, p):
+    x, y = [number(v) for v in p["uv"]]
+    ref = p.get("ref")
+    if ref and ref["kind"] == "point" and ref["id"] in s.points:
+        return ref["id"]
+    pid = s.add_point(x, y)
+    if ref:
+        kind = ref["kind"]
+        if kind in ("mid", "on") and ref["id"] in s.entities:
+            s.add_constraint("midpoint" if kind == "mid" else "point_on", pid, ref["id"])
+        elif kind == "intersection":
+            for eid in ref["ids"]:
+                if eid in s.entities:
+                    s.add_constraint("point_on", pid, eid)
+        elif kind == "quadrant" and ref["id"] in s.entities:
+            eid = ref["id"]
+            s.add_constraint("point_on", pid, eid)
+            s.add_constraint(ref["axis"], s.entities[eid]["c"], pid)
+        elif kind == "align" and ref["id"] in s.points:
+            s.add_constraint(ref["axis"], ref["id"], pid)
+    return pid
+
+
+def sketch_edit(req):
+    s = draft["sketch"]
+    before = s.to_dict()
+    old_bad = set(s.status.get("bad", []))
+    try:
+        op = req["op"]
+        if op == "sketch_draw":
+            tool = req["tool"]
+            ps = req["points"]
+            construction = bool(req.get("construction"))
+            a = point_at(s, ps[0])
+            if tool == "point":
+                s.add_point_entity(a)
+            elif tool == "line":
+                b = point_at(s, ps[1])
+                if a == b or math.dist(s.points[a], s.points[b]) < 1e-8:
+                    raise ValueError("Zero length line")
+                eid = s.add_line(a, b, construction)
+                if abs(s.points[a][1]-s.points[b][1]) < 1e-8:
+                    s.add_constraint("horizontal", eid)
+                elif abs(s.points[a][0]-s.points[b][0]) < 1e-8:
+                    s.add_constraint("vertical", eid)
+            elif tool == "rect":
+                b = point_at(s, ps[1])
+                x,y = s.points[a]
+                u,v = s.points[b]
+                if abs(x-u)<1e-8 or abs(y-v)<1e-8:
+                    raise ValueError("Rectangle needs positive width and height")
+                c,d = s.add_point(u,y),s.add_point(x,v)
+                ids = [s.add_line(p,q,construction) for p,q in ((a,c),(c,b),(b,d),(d,a))]
+                for eid,ctype in zip(ids, ("horizontal","vertical","horizontal","vertical")):
+                    s.add_constraint(ctype,eid)
+            elif tool == "circle":
+                r = math.dist(s.points[a], ps[1]["uv"])
+                if r < 1e-8:
+                    raise ValueError("Zero radius")
+                eid = s.add_circle(a,r,construction)
+                if ps[1].get("ref"):
+                    rim = point_at(s,ps[1])
+                    if rim != a:
+                        s.add_constraint("point_on",rim,eid)
+                        if not any(rim in s.entity_points(i) for i in s.entities):
+                            s.add_point_entity(rim)
+            elif tool == "arc":
+                # Three points on the arc: start, through, end.
+                p,q,r = [item["uv"] for item in ps]
+                x,y = p
+                u,v = q
+                w,z = r
+                den = 2*(x*(v-z)+u*(z-y)+w*(y-v))
+                if abs(den)<1e-10:
+                    raise ValueError("Arc needs three non-collinear points")
+                pp,qq,rr = x*x+y*y,u*u+v*v,w*w+z*z
+                center = [(pp*(v-z)+qq*(z-y)+rr*(y-v))/den,
+                          (pp*(w-u)+qq*(x-w)+rr*(u-x))/den]
+                c = s.add_point(*center)
+                b = point_at(s,ps[2])
+                if den < 0:
+                    a,b = b,a
+                s.add_arc(c,a,b,construction)
+            else:
+                raise ValueError("Unsupported sketch tool")
+        elif op == "sketch_delete":
+            s.delete(req["ids"])
+        elif op == "sketch_constraint":
+            kind = req["kind"]
+            refs = req["refs"]
+            ents = s.entities
+            if kind in ("horizontal","vertical"):
+                if len(refs) != 1 or ents.get(refs[0],{}).get("type") != "line":
+                    raise ValueError("Select one line")
+                s.add_constraint(kind,*refs)
+            elif kind in ("parallel","perpendicular","equal"):
+                if len(refs)!=2 or any(ents.get(e,{}).get("type")!="line" for e in refs):
+                    raise ValueError("Select two lines")
+                s.add_constraint(kind,*refs)
+            elif kind == "distance":
+                if len(refs)!=1 or ents.get(refs[0],{}).get("type")!="line":
+                    raise ValueError("Select one line")
+                s.add_constraint(kind,*refs,value=number(req["value"],1e-8))
+            elif kind == "radius":
+                if len(refs)!=1 or ents.get(refs[0],{}).get("type") not in ("circle","arc"):
+                    raise ValueError("Select a circle or arc")
+                s.add_constraint(kind,*refs,value=number(req["value"],1e-8))
+            else:
+                raise ValueError("Unsupported constraint")
+        if not s.solve() and set(s.status.get("bad", [])) - old_bad:
+            raise ValueError("Constraint cannot be solved")
+    except Exception:
+        draft["sketch"] = Sketch.from_dict(before)
+        draft["sketch"].solve()
+        raise
+    draft["undo"].append(before)
+    return sketch_view()
+
+
+def finish_sketch():
+    global draft
+    s = draft["sketch"]
+    if not s.entities:
+        raise ValueError("Sketch is empty")
+    f = copy.deepcopy(doc.feature(draft["id"])) if draft["id"] else doc.make_feature("sketch")
+    f["params"].update(plane=draft["plane"],sketch=s.to_dict())
+    transaction(lambda: doc.replace_feature(f) if draft["id"] else doc.add_feature(f))
+    draft = None
+
+
+def add_solid(req):
+    kind = req["kind"]
+    if kind not in ("extrude","revolve","fillet","chamfer"):
+        raise ValueError("Unsupported feature")
+    f = doc.make_feature(kind)
+    p = f["params"]
+    if kind in ("extrude","revolve"):
+        fid = req["sketch"]
+        sr = doc.state.sketches[fid]
+        indexes = list(dict.fromkeys(int(i) for i in req["regions"]))
+        if not indexes or any(i<0 or i>=len(sr.regions) for i in indexes):
+            raise ValueError("Select sketch regions")
+        op = req.get("operation","new")
+        if op not in ("new","add","remove","intersect"):
+            raise ValueError("Invalid operation")
+        p.update(regions=[F.region_ref(sr,fid,sr.regions[i]) for i in indexes],op=op,flip=bool(req.get("flip")))
+        if kind == "extrude":
+            p.update(depth=number(req["value"],1e-8),end="blind")
+        else:
+            axis = req.get("axis","Z")
+            if axis not in ("X","Y","Z"):
+                raise ValueError("Invalid axis")
+            angle = number(req["value"],1e-8)
+            if angle>360:
+                raise ValueError("Angle exceeds 360 degrees")
+            p.update(axis={"kind":"std","name":axis},end="full" if angle==360 else "blind",angle=angle)
+    else:
+        picks = req.get("edges",[])
+        if not picks:
+            raise ValueError("Select model edges")
+        p["edges"] = [subref(item,"edge")[2] for item in picks]
+        p["radius" if kind=="fillet" else "distance"] = number(req["value"],1e-8)
+    transaction(lambda: doc.add_feature(f))
+
+
 def call(request):
-    global doc
+    global doc, draft
     start = time.perf_counter()
     op = request["op"]
-    if op == "demo":
+    if op == "new":
+        doc = Document()
+        draft = None
+    elif op == "demo":
         doc = demo()
+        draft = None
     elif op == "open":
         doc = open_document(request["content"])
+        draft = None
     elif doc is None:
         raise ValueError("Open or create a document first")
     elif op == "depth":
         value = float(request["value"])
         if not math.isfinite(value) or not 0 < value <= 100000:
             raise ValueError("Depth must be positive and finite")
-        d = Document.from_dict(json.loads(doc.to_json()))
-        f = next(f for f in d.features if f["id"] == request["id"])
+        f = copy.deepcopy(doc.feature(request["id"]))
         if f["type"] != "extrude" or f.get("params", {}).get("end", "blind") != "blind":
             raise ValueError("Only blind extrusions can be edited in this prototype")
         f["params"]["depth"] = value
-        d.rebuild()
-        if d.errors:
-            raise RuntimeError(str(d.errors))
-        doc = d
+        transaction(lambda: doc.replace_feature(f))
+    elif op == "begin_sketch":
+        return begin_sketch(request)
+    elif op in ("sketch_draw","sketch_delete","sketch_constraint"):
+        return sketch_edit(request)
+    elif op == "sketch_undo":
+        if draft["undo"]:
+            draft["sketch"] = Sketch.from_dict(draft["undo"].pop())
+            draft["sketch"].solve()
+        return sketch_view()
+    elif op == "sketch_finish":
+        finish_sketch()
+    elif op == "sketch_cancel":
+        draft = None
+    elif op == "solid":
+        add_solid(request)
+    elif op == "undo":
+        doc.undo()
+    elif op == "redo":
+        doc.redo()
+    elif op == "suppress":
+        doc.set_suppressed(request["id"],bool(request["value"]))
+    elif op == "delete":
+        doc.delete_features([request["id"]])
+    elif op == "rename":
+        doc.rename_feature(request["id"],str(request["name"])[:200])
     elif op == "save":
         return {"file": doc.to_json(), "name": "model.fshape"}
     elif op == "export":
