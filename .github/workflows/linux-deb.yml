@@ -47,7 +47,9 @@ jobs:
           ET.parse("packaging/linux/freeshape.xml")
           PY
       - name: Test translation catalog
-        run: python -m pytest -q tests/test_i18n.py
+        run: |
+          python -m compileall -q freeshape
+          QT_QPA_PLATFORM=offscreen python -m pytest -q tests/test_i18n.py
       - name: Build DEB and verify its contents
         run: |
           PYTHON=python bash packaging/linux/build_deb.sh
@@ -120,12 +122,13 @@ jobs:
           ## FreeShape for Debian and Ubuntu (amd64)
 
           Unofficial fork build based on upstream FreeShape 2.6.0, with native DEB packaging
-          and initial Russian localization.
+          and expanded Russian localization.
 
           - Download the .deb below and install with sudo apt install ./freeshape_*.deb.
           - Choose View → Language → Русский, then restart; system language is selected by default.
-          - Russian translation covers the home screen, main menus and selected tooltips.
-            Some advanced CAD dialogs remain in English.
+          - Russian translation covers CAD operation parameters, sketch hints, assembly and drawing controls,
+            history, configuration, shortcuts and menus (over 800 catalog entries).
+            Some dynamic messages and advanced controls still remain in English.
           - The package and geometry/localization self-test are checked on Debian 12/13 and
             Ubuntu 24.04/26.04. Interactive desktop testing is still recommended.
           - SHA256SUMS contains the SHA-256 checksum of the package.

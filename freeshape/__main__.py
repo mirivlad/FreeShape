@@ -113,13 +113,14 @@ def main():
         os.environ["QT_QPA_PLATFORM"] = "xcb"
     from PySide6.QtWidgets import QApplication
     from PySide6.QtGui import QSurfaceFormat
-    from .i18n import tr
+    from .i18n import initialize, tr
     fmt = QSurfaceFormat()
     fmt.setSamples(4)
     fmt.setDepthBufferSize(24)
     QSurfaceFormat.setDefaultFormat(fmt)
     app = QApplication(sys.argv)
     app.setApplicationName("FreeShape")
+    initialize(app)
     if sys.platform.startswith("linux"):
         # PyOpenGL must talk to the same OpenGL as Qt: GLX under X11, EGL under Wayland. Left to itself it picks EGL
         # whenever the desktop session is Wayland — even when Qt runs on X11 — and then every drawing call fails

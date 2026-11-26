@@ -837,5 +837,16 @@
   "Insert parts from Part Studios or a file": "Вставить детали из студий или файла",
   "Fix / unfix": "Закрепить / освободить",
   "Sketch regions": "Области эскиза",
-  "Part Studio tools": "Инструменты студии деталей"
+  "Part Studio tools": "Инструменты студии деталей",
+  "Units: {unit} ▾": "Единицы: {unit} ▾",
+  "Default: {unit}": "По умолчанию: {unit}",
+  "This document": "Текущий документ",
+  "New documents": "Новые документы",
+  "millimetre": "миллиметр",
+  "centimetre": "сантиметр",
+  "metre": "метр",
+  "inch": "дюйм",
+  "foot": "фут",
+  "micrometre": "микрометр",
+  "yard": "ярд"
 }

@@ -155,7 +155,7 @@ class ShortcutPopup(QFrame):
             b.setIcon(c["icon"])
             b.setIconSize(QSize(26, 26))
             b.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-            text = c["label"]
+            text = tr(c["label"])
             b.setText(text if len(text) <= 14 else text[:13] + "…")
             keys = [x for x in (str(k + 1) if k < 9 else "", c.get("key", "")) if x]
             b.setToolTip(tr(c["label"]) + (f"  ({', '.join(keys)})" if keys else ""))
@@ -264,7 +264,7 @@ class CustomizeDialog(QDialog):
 
     # ---- lists
     def _item(self, c):
-        it = QListWidgetItem(c["icon"], c["label"])
+        it = QListWidgetItem(c["icon"], tr(c["label"]))
         it.setData(Qt.UserRole, c["id"])
         return it
 

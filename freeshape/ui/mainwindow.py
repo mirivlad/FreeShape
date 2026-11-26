@@ -3473,26 +3473,26 @@ class MainWindow(QMainWindow):
         from .. import units as U
         u = getattr(self.doc, "units", "mm") if self.doc is not None and self.doc.kind != "drawing" else "mm"
         U.set_unit(u)
-        self.units_label.setText(f"Units: {U.NAMES[U.unit()]} ▾")
+        self.units_label.setText(tr("Units: {unit} ▾").format(unit=tr(U.NAMES[U.unit()])))
         self.units_label.setEnabled(self.doc is not None and self.doc.kind != "drawing")
 
     def _fill_units_menu(self, m):
         from PySide6.QtGui import QActionGroup
         from .. import units as U
         m.clear()
-        m.addSection("This document")
+        m.addSection(tr("This document"))
         grp = QActionGroup(m)
         cur = getattr(self.doc, "units", "mm")
         for u in U.ORDER:
-            a = m.addAction(f"{U.NAMES[u].capitalize()} ({u})")
+            a = m.addAction(f"{tr(U.NAMES[u]).capitalize()} ({u})")
             a.setCheckable(True)
             a.setChecked(u == cur)
             grp.addAction(a)
             a.triggered.connect(lambda _=False, uu=u: self.set_doc_units(uu))
-        m.addSection("New documents")
-        dm = submenu(m, f"Default: {U.NAMES[self.default_units()]}")
+        m.addSection(tr("New documents"))
+        dm = submenu(m, tr("Default: {unit}").format(unit=tr(U.NAMES[self.default_units()])))
         for u in U.ORDER:
-            a = dm.addAction(U.NAMES[u].capitalize())
+            a = dm.addAction(tr(U.NAMES[u]).capitalize())
             a.setCheckable(True)
             a.setChecked(u == self.default_units())
             a.triggered.connect(lambda _=False, uu=u: self.settings.setValue("default_units", uu))

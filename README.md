@@ -65,6 +65,8 @@ Release notes: [2.6.0](docs/releases/2.6.0.md), [2.5.0](docs/releases/2.5.0.md).
 
 ## Install
 
+**Debian / Ubuntu (amd64), including Russian UI:** [Download the latest DEB package from this fork](https://github.com/mirivlad/FreeShape/releases/latest). Install it with `sudo apt install ./freeshape_*.deb`. The upstream downloads below remain available separately.
+
 Grab the file for your system from the [latest release](https://github.com/richiewillmott/FreeShape/releases/latest):
 
 | | File | First run |

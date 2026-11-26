@@ -121,7 +121,7 @@ class ShortcutsDialog(QDialog):
                 k.setFont(bold)
                 self.table.setItem(r, 0, k)
                 self.table.setItem(r, 1, QTableWidgetItem(tr(action)))
-                self.rows.append((r, sec_row, f"{section} {keys} {action}".lower()))
+                self.rows.append((r, sec_row, f"{section} {tr(section)} {keys} {action} {tr(action)}".lower()))
         self.table.resizeRowsToContents()
         lay.addWidget(self.table, 1)
         self.none = QLabel(tr("No shortcut matches that."))
