@@ -17,6 +17,7 @@ from ..expr import with_unit
 from ..sketch import Sketch, ORIGIN, DIMENSIONS, CONSTRAINT_LABELS
 from . import theme
 from . import boxsel
+from . import smart_snap as SS
 from .icons import CONSTRAINT_GLYPHS
 from .numparse import parse_number, fmt, has_vars
 from .. import sketch_ops as OPS
@@ -162,6 +163,11 @@ class Sketcher:
         self._first_cons = []   # inference constraints of the first click of a two-click tool
         self.infer_hits = []
         self._infer_cons = []
+        self._wake_entities = []
+        self._snap_disabled = False
+        self._snap_sources = []
+        self._direction_infer = None
+        self._equal_circle = None
 
     def set_tool(self, tool):
         self._end_editor()
@@ -301,16 +307,29 @@ class Sketcher:
         self.infer_tan = None       # circle / arc the line being drawn is tangent to
         self.model_hover = None     # (part id, edge index) of the part edge being snapped to
         self._snap_vp = vp
+        self._snap_sources = []
+        self._direction_infer = None
+        self._equal_circle = None
+        if getattr(self, "_snap_disabled", False):
+            return uv, None
         if uv is None:
             return None, None
         h = self.hit(vp, x, y, kinds=("point",), exclude=exclude)
         if h:
             self._acquire_source(h[1], anchor_uv)
+            self._snap_sources = [eid for eid in self.sk.entities
+                                  if h[1] in self.sk.entity_points(eid)]
             return np.array(self.sk.points[h[1]]), h
-        mid = self._hit_midpoint(vp, x, y, exclude)
-        if mid:
-            self._acquire_source(("mid", mid[0]), anchor_uv)
-            return mid[1], ("mid", mid[0])
+        screen = lambda q: self.scr(vp, q)
+        xy = np.array([x, y], float)
+        target = SS.direct_targets(self.sk, screen, xy, exclude)
+        if target:
+            q, ref = target
+            self._acquire_source(ref, anchor_uv)
+            self._snap_sources = self._ref_entities(ref)
+            for eid in self._snap_sources:
+                self._wake_entity(eid)
+            return q, ref
         mp = self._model_point_hit(vp, x, y)
         if mp:
             m_uv, key = mp
@@ -323,6 +342,10 @@ class Sketcher:
                 self.infer_tan = eid
                 self.infer_hits.append((np.asarray(anchor_uv, float), "T"))
                 return t_uv, (("tan", eid) if kind == "on" else None)
+        # Only explicitly hovered curves become direction/equal-size references.
+        curve_hit = self.hit(vp, x, y, kinds=("entity",), exclude=exclude)
+        if curve_hit:
+            self._wake_entity(curve_hit[1])
         # candidate alignment sources: the line's start point first, then points/midpoints hovered earlier
         cands = []
         if anchor_uv is not None:
@@ -334,8 +357,10 @@ class Sketcher:
         pick = {}
         for ref, s_uv in cands:
             axis = self._axis_hit(vp, s_uv, x, y)
-            if axis and axis not in pick:
-                pick[axis] = (ref, s_uv)
+            if axis:
+                distance = SS.axis_distance(screen, s_uv, xy, axis)
+                if axis not in pick or distance < SS.axis_distance(screen, pick[axis][1], xy, axis):
+                    pick[axis] = (ref, s_uv)
         if pick:
             u, v = uv
             if "H" in pick:
@@ -349,10 +374,45 @@ class Sketcher:
                     self.infer = axis       # the line being drawn gets its own horizontal/vertical constraint
                 else:
                     self._infer_cons.append(("horizontal" if axis == "H" else "vertical", ref))
-        h = self.hit(vp, x, y, kinds=("entity",), exclude=exclude)
-        if h and self.sk.entities[h[1]]["type"] != "point" and not pick:
+        h = curve_hit
+        if pick and len(pick) == 1 and h:
+            axis = next(iter(pick))
+            qs = SS.guide_crossings(self.sk, h[1], uv, axis)
+            if qs:
+                q = min(qs, key=lambda q: np.linalg.norm(screen(q) - xy))
+                if np.linalg.norm(screen(q) - xy) <= 12:
+                    self._snap_sources = [h[1]]
+                    return q, ("on", h[1])
+        if h and self.sk.entities[h[1]]["type"] in ("line", "circle", "arc") and not pick:
             uv = self._project_on(h[1], uv)
-            return uv, ("on", h[1])
+            if SS.contains(self.sk, h[1], uv):
+                self._snap_sources = [h[1]]
+                return uv, ("on", h[1])
+        if not pick and self.tool == "line" and anchor_uv is not None:
+            relation = SS.direction_target(self.sk, screen, xy, uv, np.asarray(anchor_uv),
+                                           self._wake_entities, exclude)
+            if relation:
+                kind, eid, uv = relation
+                self._direction_infer = (kind, eid)
+                self._snap_sources = [eid]
+                self.infer_hits.append((np.asarray(anchor_uv), {"parallel": "∥", "perpendicular": "⊥", "equal": "="}[kind]))
+        if not pick and not h and self.tool == "circle" and self.temp:
+            center = np.asarray(self.temp[0][0])
+            d = uv - center
+            length = np.linalg.norm(d)
+            if length > 1e-9:
+                choices = []
+                for eid in self._wake_entities:
+                    e = self.sk.entities.get(eid, {})
+                    if e.get("type") in ("circle", "arc"):
+                        q = center + d / length * self.sk.radius(eid)
+                        dist = np.linalg.norm(screen(q) - xy)
+                        if dist <= SS.GUIDE_PX:
+                            choices.append((dist, eid, q))
+                if choices:
+                    _, self._equal_circle, uv = min(choices, key=lambda a: (a[0], a[1]))
+                    self._snap_sources = [self._equal_circle]
+                    self.infer_hits.append((center, "="))
         me = self._model_edge_hit(vp, x, y) if not pick else (
             self._model_edge_on_guide(vp, x, y, uv, pick) if len(pick) == 1 else None)
         if me:
@@ -531,31 +591,34 @@ class Sketcher:
         if ref in self._infer_src:
             self._infer_src.remove(ref)
         self._infer_src.append(ref)
-        del self._infer_src[:-3]
+        del self._infer_src[:-8]
+
+    def _wake_entity(self, eid):
+        if self.sk.entities.get(eid, {}).get("type") not in ("line", "circle", "arc"):
+            return
+        if eid in self._wake_entities:
+            self._wake_entities.remove(eid)
+        self._wake_entities.append(eid)
+        del self._wake_entities[:-6]
+
+    def _ref_entities(self, ref):
+        if ref[0] == "intersection":
+            return list(ref[1])
+        if ref[0] == "rect_center":
+            return list(ref[2])
+        return [ref[1]]
 
     def _src_uv(self, ref):
-        sk = self.sk
-        if isinstance(ref, tuple):
-            e = sk.entities.get(ref[1])
-            if not e or e["type"] != "line":
-                return None
-            return (sk.P(e["p1"]) + sk.P(e["p2"])) / 2
-        return sk.P(ref) if ref in sk.points else None
+        return SS.ref_position(self.sk, ref)
 
     def _axis_hit(self, vp, src_uv, x, y):
-        """'H' / 'V' when the cursor is (on screen) nearly horizontal / vertical from src_uv."""
-        sa = self.scr(vp, src_uv)
-        m = np.array([x - sa[0], y - sa[1]])
-        nm = np.linalg.norm(m)
-        if nm <= 12:
+        """Fixed-pixel alignment tolerance, independent of guide length and zoom."""
+        screen = lambda q: self.scr(vp, q)
+        xy = np.array([x, y])
+        if np.linalg.norm(screen(src_uv) - xy) <= 12:
             return None
-        su = self.scr(vp, src_uv + np.array([1.0, 0])) - sa
-        sv = self.scr(vp, src_uv + np.array([0, 1.0])) - sa
-        if abs(_cross2(su / np.linalg.norm(su), m / nm)) < 0.06:
-            return "H"
-        if abs(_cross2(sv / np.linalg.norm(sv), m / nm)) < 0.06:
-            return "V"
-        return None
+        d, axis = min((SS.axis_distance(screen, src_uv, xy, a), a) for a in ("H", "V"))
+        return axis if d <= SS.GUIDE_PX else None
 
     def _hit_midpoint(self, vp, x, y, exclude=()):
         best = (8.0, None)
@@ -570,21 +633,19 @@ class Sketcher:
         return best[1]
 
     def _source_point(self, ref):
-        """The sketch point behind an inference source; a line midpoint gets a construction point."""
-        sk = self.sk
-        if isinstance(ref, tuple):
-            eid = ref[1]
-            e = sk.entities.get(eid)
-            if not e:
-                return None
-            for c in sk.constraints:
-                if c["type"] == "midpoint" and c["refs"][1] == eid:
+        """Materialize an awakened virtual point only on commit."""
+        if isinstance(ref, str):
+            return ref if ref in self.sk.points else None
+        q = self._src_uv(ref)
+        if q is None:
+            return None
+        if ref[0] == "mid":
+            for c in self.sk.constraints:
+                if c["type"] == "midpoint" and c["refs"][1] == ref[1]:
                     return c["refs"][0]
-            m = sk.add_point(*((sk.P(e["p1"]) + sk.P(e["p2"])) / 2))
-            sk.add_constraint("midpoint", m, eid)
-            sk.add_point_entity(m)
-            return m
-        return ref if ref in sk.points else None
+        pid = self._point_at(q, ref)
+        self.sk.add_point_entity(pid)
+        return pid
 
     def _project_on(self, eid, uv):
         e = self.sk.entities[eid]
@@ -618,6 +679,22 @@ class Sketcher:
             self.sk.add_constraint("point_on", pid, snap[1])
         elif snap and snap[0] == "mid":
             self.sk.add_constraint("midpoint", pid, snap[1])
+        elif snap and snap[0] == "intersection":
+            for eid in snap[1]:
+                self.sk.add_constraint("point_on", pid, eid)
+        elif snap and snap[0] == "quadrant":
+            eid, axis = snap[1:3]
+            self.sk.add_constraint("point_on", pid, eid)
+            self.sk.add_constraint(axis, self.sk.entities[eid]["c"], pid)
+        elif snap and snap[0] == "rect_center":
+            a, b = snap[1]
+            diag = next((eid for eid, e in self.sk.entities.items()
+                         if e["type"] == "line" and e.get("helper")
+                         and {e["p1"], e["p2"]} == {a, b}), None)
+            if diag is None:
+                diag = self.sk.add_line(a, b, True)
+                self.sk.entities[diag]["helper"] = True
+            self.sk.add_constraint("midpoint", pid, diag)
         for ctype, ref in (cons or []):
             src = self._source_point(ref)
             if src and src != pid:
@@ -632,6 +709,7 @@ class Sketcher:
             self._prompt_label = None
         t = self.tool
         mods = e.modifiers()
+        self._snap_disabled = bool(mods & Qt.ShiftModifier) and t in DRAW_TOOLS | {"slot"}
         if t == "select":
             h = self.hit(vp, x, y)
             if h is None:
@@ -834,6 +912,7 @@ class Sketcher:
                     self.selection.remove(d["id"])
         if self.tool in DRAW_TOOLS and moved and self.temp and self.tool in ("circle", "rect", "center_rect", "hexagon", "line"):
             # click-drag-release drawing
+            self._snap_disabled = bool(e is not None and e.modifiers() & Qt.ShiftModifier)
             self._draw_click(vp, x, y)
 
     PASSIVE_TOOLS = ("select", "sk_fillet", "sk_chamfer", "offset", "sk_split", "sk_extend", "sk_mirror",
@@ -849,6 +928,7 @@ class Sketcher:
         return True
 
     def _mouse_move(self, vp, x, y, e):
+        self._snap_disabled = bool(e is not None and e.modifiers() & Qt.ShiftModifier) and self.tool in DRAW_TOOLS | {"slot"}
         anchor = None
         if self.tool == "line" and self.chain_anchor is not None:
             anchor = self.sk.P(self.chain_anchor) if isinstance(self.chain_anchor, str) else self.chain_anchor
@@ -1206,6 +1286,9 @@ class Sketcher:
                 sk.add_constraint("horizontal", lid)
             elif self.infer == "V":
                 sk.add_constraint("vertical", lid)
+            if self._direction_infer and self._direction_infer[1] in sk.entities:
+                kind, ref = self._direction_infer
+                sk.add_constraint(kind, lid, ref)
             self.changed(True)
             pa, pb = sk.P(a), sk.P(b)
             d = pb - pa
@@ -1478,6 +1561,14 @@ class Sketcher:
             self.push_undo()
             c = self._point_at(c_uv, cs, self._first_cons)
             cid = sk.add_circle(c, r, cons)
+            if self._equal_circle and self._equal_circle in sk.entities:
+                sk.add_constraint("equal", cid, self._equal_circle)
+            elif snap and snap[0] in ("point", "mid", "intersection", "quadrant", "rect_center", "on"):
+                rim = self._point_at(uv, snap, icons)
+                if rim != c:
+                    sk.add_constraint("point_on", rim, cid)
+                    if not any(rim in sk.entity_points(eid) for eid in sk.entities):
+                        sk.add_point_entity(rim)
             self.temp = []
             self.changed(True)
             ctr = sk.P(c)
