@@ -3,6 +3,9 @@ on:
   push:
     branches: [experiment/browser-wasm]
   workflow_dispatch:
+concurrency:
+  group: browser-wasm-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -31,11 +34,15 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Verify actual CAD in browser
         run: node webcad/smoke.mjs
+      - name: Check branch tip before publication
+        id: tip
+        run: |
+          if [ "$(git ls-remote origin refs/heads/experiment/browser-wasm | cut -f1)" = "$GITHUB_SHA" ]; then echo "current=true" >> "$GITHUB_OUTPUT"; fi
       - name: Logs
         if: always()
         run: docker logs cad || true
       - name: Publish verified image
-        if: github.repository == 'mirivlad/FreeShape'
+        if: github.repository == 'mirivlad/FreeShape' && steps.tip.outputs.current == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

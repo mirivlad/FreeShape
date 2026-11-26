@@ -16,10 +16,10 @@ worker.onerror=e=>{for(const p of pending.values())p.reject(Error(e.message));pe
 function call(op,args={}){return new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});worker.postMessage({id,op,...args});});}
 const scene=new THREE.Scene();scene.background=new THREE.Color(0xdbe3ed);
 const camera=new THREE.OrthographicCamera(-65,65,65,-65,0.1,1e7);camera.position.set(120,-150,110);camera.up.set(0,0,1);
-let renderer,controls,frame=0,span=130;
+let renderer,controls,frame=0,span=130,renderCount=0;
 const group=new THREE.Group(),highlight=new THREE.Group();scene.add(group,highlight);
 const raycaster=new THREE.Raycaster(),mouse=new THREE.Vector2();let pickables=[],edgeData=[],facePick=null,edgePicks=[],solidKind=null;
-function invalidate(){if(!renderer||frame)return;frame=requestAnimationFrame(()=>{frame=0;renderer.render(scene,camera);});}
+function invalidate(){if(!renderer||frame)return;frame=requestAnimationFrame(()=>{frame=0;renderer.render(scene,camera);document.body.dataset.renders=String(++renderCount);document.body.dataset.camera=JSON.stringify({position:camera.position.toArray(),target:controls.target.toArray()});});}
 try{
  renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:"high-performance"});renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));$("view").prepend(renderer.domElement);
  controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=false;controls.screenSpacePanning=true;
@@ -82,7 +82,7 @@ function buttons(){const active=sketchEditor?.active;
  }
  $("main-tools").hidden=!!active;
 }
-async function request(op,args={}){if(busy)throw Error("Вычисление уже выполняется");busy=true;buttons();$("errors").textContent="";status("Вычисление: "+op);try{const r=await call(op,args);status("Готово");return r;}catch(e){error(e);throw e;}finally{busy=false;buttons();}}
+async function request(op,args={}){if(busy)throw Error("Вычисление уже выполняется");if(sketchEditor.active&&!op.startsWith("sketch_"))throw Error("Сначала завершите эскиз");busy=true;buttons();$("errors").textContent="";status("Вычисление: "+op);try{const r=await call(op,args);status("Готово");return r;}catch(e){error(e);throw e;}finally{busy=false;buttons();}}
 async function run(op,args={},refit=false){try{const r=await request(op,args);if(r.file!==undefined){const bytes=op==="export"?Uint8Array.from(atob(r.file),c=>c.charCodeAt(0)):r.file;const url=URL.createObjectURL(new Blob([bytes],{type:"application/octet-stream"}));const a=document.createElement("a");a.href=url;a.download=r.name;a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);}else{if(["open","demo","new"].includes(op))selected=null;renderModel(r,refit);}return r;}catch(e){return null;}}
 const sketchEditor=new SketchEditor(request,result=>{renderModel(result,true);buttons();},error);
 async function startSketch(id=null){if(busy||sketchEditor.active)return;try{const args=id?{id}:facePick?{face:facePick}:{plane:$("plane").value};const result=await request("begin_sketch",args);sketchEditor.show(result);$("hint").textContent="";buttons();}catch(e){}}
@@ -107,5 +107,5 @@ $("delete").onclick=()=>{if(selected&&confirm("Удалить выбранную
 $("rename").onclick=()=>{const f=selectedFeature();if(f){const name=prompt("Название",f.name);if(name?.trim())run("rename",{id:f.id,name:name.trim()});}};
 $("suppress").onclick=()=>{const f=selectedFeature();if(f)run("suppress",{id:f.id,value:!f.suppressed});};
 window.addEventListener("keydown",e=>{if(sketchEditor.active||e.target.matches("input,textarea,select"))return;if(e.ctrlKey&&e.code==="KeyZ"){e.preventDefault();run(e.shiftKey?"redo":"undo");}else if(e.ctrlKey&&e.code==="KeyY"){e.preventDefault();run("redo");}else if(e.ctrlKey&&e.code==="KeyS"){e.preventDefault();run("save");}});
-$("offline").onclick=async()=>{if(!("serviceWorker" in navigator)){error("Офлайн-кэш требует HTTPS или localhost");return;}try{status("Подготовка офлайн-кэша…");const registration=await navigator.serviceWorker.register("./sw.js");await navigator.serviceWorker.ready;status("Офлайн-кэш готов");document.body.dataset.offline="ready";}catch(e){error(e);}};
+$("offline").onclick=async()=>{if(!("serviceWorker" in navigator)){error("Офлайн-кэш требует HTTPS или localhost");return;}try{status("Подготовка офлайн-кэша…");const registration=await navigator.serviceWorker.register("./sw.js");await navigator.serviceWorker.ready;if(!navigator.serviceWorker.controller){await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error("Офлайн-кэш не активировался")),240000);navigator.serviceWorker.addEventListener("controllerchange",()=>{clearTimeout(timer);resolve();},{once:true});});}status("Офлайн-кэш готов");document.body.dataset.offline="ready";}catch(e){error(e);}};
 try{const info=await call("init");$("runtime").textContent="Python "+info.python+" · OCP "+info.ocp+" · "+info.platform;document.body.dataset.runtime="ready";if(!renderer)throw Error("WebGL недоступен");ready=true;buttons();const result=await run("demo",{},true);if(!result)throw Error($("errors").textContent);document.body.dataset.ready="true";}catch(e){error(e);$("hint").textContent="Ядро не запустилось. См. диагностику.";document.body.dataset.ready="false";}

@@ -21,6 +21,17 @@ service-worker caching. No uploads or persistent container volumes required.
 For an offline reload, press Offline cache once while connected; cache may
 be evicted by the browser. Use Save .fshape for durable user-owned files.
 
+## FreeShape Web 0.2.0
+
+The workbench adds a local 2D sketch editor (line, rectangle, circle, arc,
+point and construction geometry), local characteristic-point/intersection
+snapping, a native solver on each committed edit, dimensions and selected
+constraints, edit existing sketches, feature rename/suppress/delete, document
+undo/redo, planar face selection, extrusion/revolution and edge fillet/chamfer.
+The 3D viewport renders on demand and has no camera inertia. Model edges are
+batched per body. Middle/right drag pans; left drag orbits; click selects;
+use Edges mode and Shift for multiple edge picks.
+
 ## Acceptance
 
 Demo: 40 x 30 x 10 mm, volume 12000 mm³. Select Extrude and set depth to 20;
@@ -29,9 +40,13 @@ CI uses a real Chromium browser and disables networking after offline caching.
 
 ## Limits
 
-Prototype, not full CAD: no browser sketch editing, assembly/drawing editing,
-plugin or derived-document execution, persistent local project catalogue or
-general feature creation. Existing Part Studios with supported operations
+Prototype, not full CAD: no assembly/drawing editing, plugin or derived-document
+execution, persistent local project catalogue, complete original tool/dialog parity,
+or general feature editing. Sketch constraints cover a subset; selection is
+entity-level, and there is no constrained point dragging yet. Current edge
+picking is screen-space and may select an occluded edge. Arc preview is a polyline
+until committed. Existing sketches with text/image entities do not render these
+entities in the editor. Existing Part Studios with supported operations
 can be rebuilt; other operations may fail due to browser-specific OCP
 or OS limitations. Use only trusted documents and keep backups. JSON mesh
 transfer is intentionally simple; large projects may exhaust browser memory.
