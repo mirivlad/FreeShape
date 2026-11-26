@@ -9,7 +9,7 @@ try {
  page.on("pageerror",err=>console.error("page",err));
  page.on("requestfailed",req=>console.error("request",req.url(),req.failure()));
  async function noError(){const err=await page.locator("#errors").textContent();assert.equal(err.trim(),"",err);}
- async function volume(v,tol=1){await page.waitForFunction(([v,tol])=>Math.abs(Number(document.body.dataset.volume)-v)<tol||document.querySelector("#errors").textContent.trim().length>0,[v,tol],{timeout:90000});await noError();assert(Math.abs(Number(await page.locator("body").getAttribute("data-volume"))-v)<tol);}
+ async function volume(v,tol=1){await page.waitForFunction(([v,tol])=>Math.abs(Number(document.body.dataset.volume)-v)<tol||document.querySelector("#errors").textContent.trim().length>0,[v,tol],{timeout:30000}).catch(async e=>{throw Error("Expected volume "+v+"; got "+await page.locator("body").getAttribute("data-volume")+"; status "+await page.locator("#status").textContent()+"; "+await page.locator("#errors").textContent(),{cause:e});});await noError();assert(Math.abs(Number(await page.locator("body").getAttribute("data-volume"))-v)<tol);}
  async function ready(){await page.waitForFunction(()=>document.body.dataset.ready!==undefined,{},{timeout:240000});assert.equal(await page.locator("body").getAttribute("data-ready"),"true",await page.locator("#errors").textContent());}
  async function save(){const pending=page.waitForEvent("download",{timeout:90000});await page.locator("#save").click();return fs.readFile(await (await pending).path());}
  async function open(data){await page.locator("#file").setInputFiles({name:"test.fshape",mimeType:"application/json",buffer:data});}
@@ -52,6 +52,24 @@ try {
  await page.mouse.click(sk.x+sk.width/2+30*unit,sk.y+sk.height/2-20*unit);
  await page.waitForFunction(()=>document.querySelector("#sk-info").textContent.includes("4 объектов")||document.querySelector("#errors").textContent.trim());
  await noError();
+ // Select top edge midpoint, add a length, edit it, undo and redo.
+ await page.locator('[data-tool="select"]').click();
+ await page.mouse.click(sk.x+sk.width/2+15*unit,sk.y+sk.height/2-20*unit);
+ await page.locator("#sk-value").fill("30");
+ await page.locator('[data-constraint="distance"]').click();
+ await page.locator("#sk-constraints input").waitFor({state:"visible"});
+ await noError();
+ await page.locator("#sk-constraints input").fill("40");
+ await page.locator("#sk-constraints input").press("Tab");
+ await page.waitForFunction(()=>document.querySelector("#sk-constraints input")?.value==="40"&&document.querySelector("#status").textContent==="Готово");
+ await noError();
+ await page.locator("#sk-undo").click();
+ await page.waitForFunction(()=>document.querySelector("#sk-constraints input")?.value==="30");
+ await page.locator("#sk-redo").click();
+ await page.waitForFunction(()=>document.querySelector("#sk-constraints input")?.value==="40");
+ await page.locator("#sk-undo").click();
+ await page.waitForFunction(()=>document.querySelector("#sk-constraints input")?.value==="30");
+ console.log("PASS editable sketch dimension and sketch undo/redo");
  await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});
  await page.locator("#extrude").click();await page.locator("#solid-value").fill("10");await page.locator("#solid-apply").click();
  await volume(6000,80);const created=await save();assert.equal(JSON.parse(created.toString()).features.length,2);

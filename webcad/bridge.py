@@ -103,7 +103,7 @@ def sketch_view():
             "dof": s.status.get("dof"), "bad": list(s.status.get("bad", [])),
             "curves": {eid: [q.tolist() for q in s.polylines(eid, 80)]
                        for eid in s.entities if s.entities[eid]["type"] not in ("image", "text")},
-            "undo": bool(draft["undo"])}
+            "undo": bool(draft["undo"]), "redo": bool(draft["redo"])}
 
 
 def begin_sketch(req):
@@ -129,7 +129,7 @@ def begin_sketch(req):
             plane = {"kind": "std", "name": name}
         s = Sketch()
     s.solve()
-    draft = {"id": fid, "plane": plane, "sketch": s, "undo": []}
+    draft = {"id": fid, "plane": plane, "sketch": s, "undo": [], "redo": []}
     return sketch_view()
 
 
@@ -160,6 +160,7 @@ def sketch_edit(req):
     s = draft["sketch"]
     before = s.to_dict()
     old_bad = set(s.status.get("bad", []))
+    weights = None
     try:
         op = req["op"]
         if op == "sketch_draw":
@@ -174,9 +175,9 @@ def sketch_edit(req):
                 if a == b or math.dist(s.points[a], s.points[b]) < 1e-8:
                     raise ValueError("Zero length line")
                 eid = s.add_line(a, b, construction)
-                if abs(s.points[a][1]-s.points[b][1]) < 1e-8:
+                if not ps[1].get("free") and abs(s.points[a][1]-s.points[b][1]) < 1e-8:
                     s.add_constraint("horizontal", eid)
-                elif abs(s.points[a][0]-s.points[b][0]) < 1e-8:
+                elif not ps[1].get("free") and abs(s.points[a][0]-s.points[b][0]) < 1e-8:
                     s.add_constraint("vertical", eid)
             elif tool == "rect":
                 b = point_at(s, ps[1])
@@ -218,6 +219,18 @@ def sketch_edit(req):
                 s.add_arc(c,a,b,construction)
             else:
                 raise ValueError("Unsupported sketch tool")
+        elif op == "sketch_drag":
+            pid = req["id"]
+            if pid not in s.points or pid == "origin":
+                raise ValueError("Select a movable point")
+            s.points[pid] = [number(v) for v in req["uv"]]
+            weights = {(pid, 0): 1e3, (pid, 1): 1e3}
+        elif op == "sketch_dimension":
+            c = next(c for c in s.constraints if c["id"] == req["id"])
+            if c["type"] not in ("distance","hdistance","vdistance","radius","diameter","angle") or "expr" in c:
+                raise ValueError("This dimension cannot be edited here")
+            c["value"] = number(req["value"], 1e-8)
+            old_bad.discard(c["id"])
         elif op == "sketch_delete":
             s.delete(req["ids"])
         elif op == "sketch_constraint":
@@ -225,30 +238,53 @@ def sketch_edit(req):
             refs = req["refs"]
             ents = s.entities
             if kind in ("horizontal","vertical"):
-                if len(refs) != 1 or ents.get(refs[0],{}).get("type") != "line":
-                    raise ValueError("Select one line")
+                if not ((len(refs) == 1 and ents.get(refs[0],{}).get("type") == "line") or
+                        (len(refs) == 2 and all(p in s.points for p in refs))):
+                    raise ValueError("Select one line or two points")
+                s.add_constraint(kind,*refs)
+            elif kind == "fix":
+                if len(refs)!=1 or refs[0] not in s.points or refs[0]=="origin":
+                    raise ValueError("Select one movable point")
+                s.add_constraint("fix",refs[0],value=s.points[refs[0]])
+            elif kind == "coincident":
+                if len(refs)!=2 or any(p not in s.points for p in refs):
+                    raise ValueError("Select two points")
+                s.add_constraint("coincident",*refs)
+            elif kind in ("point_on","midpoint"):
+                if len(refs)!=2:
+                    raise ValueError("Select one point and one curve")
+                p,e=refs if refs[0] in s.points else refs[::-1]
+                if p not in s.points or ents.get(e,{}).get("type") not in (("line","arc") if kind=="midpoint" else ("line","circle","arc")):
+                    raise ValueError("Invalid point/curve selection")
+                s.add_constraint(kind,p,e)
+            elif kind == "concentric":
+                if len(refs)!=2 or any(ents.get(e,{}).get("type") not in ("circle","arc") for e in refs):
+                    raise ValueError("Select two circular curves")
                 s.add_constraint(kind,*refs)
             elif kind in ("parallel","perpendicular","equal"):
                 if len(refs)!=2 or any(ents.get(e,{}).get("type")!="line" for e in refs):
                     raise ValueError("Select two lines")
                 s.add_constraint(kind,*refs)
-            elif kind == "distance":
-                if len(refs)!=1 or ents.get(refs[0],{}).get("type")!="line":
-                    raise ValueError("Select one line")
+            elif kind in ("distance","hdistance","vdistance"):
+                if not ((len(refs)==1 and ents.get(refs[0],{}).get("type")=="line") or
+                        (len(refs)==2 and all(p in s.points for p in refs))):
+                    raise ValueError("Select one line or two points")
                 s.add_constraint(kind,*refs,value=number(req["value"],1e-8))
-            elif kind == "radius":
+            elif kind in ("radius","diameter"):
                 if len(refs)!=1 or ents.get(refs[0],{}).get("type") not in ("circle","arc"):
                     raise ValueError("Select a circle or arc")
                 s.add_constraint(kind,*refs,value=number(req["value"],1e-8))
             else:
                 raise ValueError("Unsupported constraint")
-        if not s.solve() and set(s.status.get("bad", [])) - old_bad:
+        if not s.solve(weights=weights) and set(s.status.get("bad", [])) - old_bad:
             raise ValueError("Constraint cannot be solved")
     except Exception:
         draft["sketch"] = Sketch.from_dict(before)
         draft["sketch"].solve()
         raise
     draft["undo"].append(before)
+    del draft["undo"][:-100]
+    draft["redo"].clear()
     return sketch_view()
 
 
@@ -324,11 +360,13 @@ def call(request):
         transaction(lambda: doc.replace_feature(f))
     elif op == "begin_sketch":
         return begin_sketch(request)
-    elif op in ("sketch_draw","sketch_delete","sketch_constraint"):
+    elif op in ("sketch_draw","sketch_delete","sketch_constraint","sketch_drag","sketch_dimension"):
         return sketch_edit(request)
-    elif op == "sketch_undo":
-        if draft["undo"]:
-            draft["sketch"] = Sketch.from_dict(draft["undo"].pop())
+    elif op in ("sketch_undo","sketch_redo"):
+        source,target = ("undo","redo") if op=="sketch_undo" else ("redo","undo")
+        if draft[source]:
+            draft[target].append(draft["sketch"].to_dict())
+            draft["sketch"] = Sketch.from_dict(draft[source].pop())
             draft["sketch"].solve()
         return sketch_view()
     elif op == "sketch_finish":

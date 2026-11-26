@@ -9,11 +9,11 @@ function status(text){$("status").textContent=text;}
 function error(err){$("errors").textContent=String(err);status("Ошибка — см. диагностику");console.error(String(err));}
 worker.onmessage=({data})=>{
  if(data.stage){status(data.stage);$("hint").textContent=data.stage;return;}
- const p=pending.get(data.id);if(!p)return;pending.delete(data.id);
+ const p=pending.get(data.requestId);if(!p)return;pending.delete(data.requestId);
  data.error?p.reject(Error(data.error)):p.resolve(data.result);
 };
 worker.onerror=e=>{for(const p of pending.values())p.reject(Error(e.message));pending.clear();error(e.message);};
-function call(op,args={}){return new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});worker.postMessage({id,op,...args});});}
+function call(op,args={}){return new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});worker.postMessage({requestId:id,payload:{op,...args}});});}
 const scene=new THREE.Scene();scene.background=new THREE.Color(0xdbe3ed);
 const camera=new THREE.OrthographicCamera(-65,65,65,-65,0.1,1e7);camera.position.set(120,-150,110);camera.up.set(0,0,1);
 let renderer,controls,frame=0,span=130,renderCount=0;

@@ -55,3 +55,7 @@ No claim of Firefox or other browser compatibility before testing.
 FreeShape copyright and GPL-3.0-or-later retained. Runtime dependencies
 retain their own licenses; upstream sources: Pyodide, NumPy, OCP.wasm,
 OpenCascade, Three.js. See their upstream projects and distributed notices.
+
+## 0.3.0
+
+Separate worker request correlation IDs from feature/point IDs. Added point selection and drag-on-release with native weighted solve, sketch undo/redo, editable numeric dimensions, constraint deletion, point coincidence/fix/point-on/midpoint/concentric and horizontal/vertical dimensions. Drag feedback is a local marker, not continuous constrained geometry preview. Tests exercise dimension edits and sketch history. Feature parity remains incomplete.

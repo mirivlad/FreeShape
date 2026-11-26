@@ -34,25 +34,27 @@ function project(c,q){
 export class SketchEditor {
  constructor(send,finish,status){
   this.send=send;this.finish=finish;this.status=status;this.canvas=$("sketch-canvas");this.ctx=this.canvas.getContext("2d");
-  this.active=false;this.busy=false;this.tool="select";this.anchors=[];this.selection=new Set();this.scale=8;this.center=[0,0];this.mouse=null;this.pan=null;this.state=null;
+  this.active=false;this.busy=false;this.tool="select";this.anchors=[];this.selection=new Set();this.scale=8;this.center=[0,0];this.mouse=null;this.pan=null;this.drag=null;this.state=null;
   this.canvas.addEventListener("contextmenu",e=>e.preventDefault());
   this.canvas.addEventListener("pointerdown",e=>this.down(e));
   this.canvas.addEventListener("pointermove",e=>this.move(e));
-  this.canvas.addEventListener("pointerup",()=>{this.pan=null;});
-  this.canvas.addEventListener("pointercancel",()=>{this.pan=null;});
+  this.canvas.addEventListener("pointerup",e=>this.up(e));
+  this.canvas.addEventListener("pointercancel",()=>{this.pan=null;this.drag=null;this.draw();});
   this.canvas.addEventListener("wheel",e=>this.wheel(e),{passive:false});
   new ResizeObserver(()=>{if(this.active)this.resize();}).observe(this.canvas);
   for(const b of document.querySelectorAll("[data-tool]"))b.onclick=()=>this.setTool(b.dataset.tool);
   for(const b of document.querySelectorAll("[data-constraint]"))b.onclick=()=>this.constraint(b.dataset.constraint);
   $("sk-delete").onclick=()=>this.remove();
   $("sk-undo").onclick=()=>this.change("sketch_undo");
+  $("sk-redo").onclick=()=>this.change("sketch_redo");
   $("sk-fit").onclick=()=>this.fit();
   $("sk-finish").onclick=()=>this.end("sketch_finish");
   $("sk-cancel").onclick=()=>this.end("sketch_cancel");
   window.addEventListener("keydown",e=>{
    if(!this.active||e.target.matches("input,textarea,select"))return;
    const keys={KeyL:"line",KeyR:"rect",KeyC:"circle",KeyA:"arc",KeyP:"point",Escape:"select"};
-   if(e.ctrlKey&&e.code==="KeyZ"){e.preventDefault();this.change("sketch_undo");}
+   if(e.ctrlKey&&e.code==="KeyZ"){e.preventDefault();this.change(e.shiftKey?"sketch_redo":"sketch_undo");}
+   else if(e.ctrlKey&&e.code==="KeyY"){e.preventDefault();this.change("sketch_redo");}
    else if(e.code==="Delete"){e.preventDefault();this.remove();}
    else if(!e.ctrlKey&&!e.altKey&&!e.metaKey&&keys[e.code]){e.preventDefault();this.setTool(keys[e.code]);}
   });
@@ -94,21 +96,23 @@ export class SketchEditor {
   }
   return cands.sort((a,b)=>a.d-b.d)[0]||{uv:q};
  }
+ pickPoint(q){let best=null;for(const [id,p] of Object.entries(this.state.draft.points)){const d=distance(q,p);if(d<7/this.scale&&(!best||d<best.d))best={id,d};}return best?.id;}
  pick(q){let best=null;for(const [id,paths] of Object.entries(this.state.curves)){for(const path of paths)for(let i=1;i<path.length;i++){const a=path[i-1],b=path[i],d=sub(b,a),p=add(a,d,Math.max(0,Math.min(1,dot(sub(q,a),d)/Math.max(dot(d,d),1e-20)))),dist=distance(p,q);if(dist<7/this.scale&&(!best||dist<best.dist))best={id,dist};}}
   for(const [id,e] of Object.entries(this.state.draft.entities))if(e.type==="point"){const dist=distance(q,this.state.draft.points[e.p]);if(dist<7/this.scale&&(!best||dist<best.dist))best={id,dist};}return best?.id;}
  down(e){if(!this.active)return;const p=this.eventPos(e);if(e.button===1||e.button===2){this.pan={p,center:[...this.center]};this.canvas.setPointerCapture(e.pointerId);e.preventDefault();return;}if(e.button!==0||this.busy)return;const q=this.uv(p);
-  if(this.tool==="select"){const id=this.pick(q);if(!e.shiftKey)this.selection.clear();if(id){if(this.selection.has(id))this.selection.delete(id);else this.selection.add(id);}this.updateInfo();this.draw();return;}
-  const hit=this.snap(q,e.shiftKey);this.anchors.push({uv:hit.uv,ref:hit.ref});const count=this.tool==="point"?1:this.tool==="arc"?3:2;
+  if(this.tool==="select"){const pid=this.pickPoint(q),id=pid||this.pick(q);if(!e.shiftKey)this.selection.clear();if(id){if(this.selection.has(id))this.selection.delete(id);else this.selection.add(id);}if(pid&&pid!=="origin"&&!e.shiftKey){this.drag={id:pid,start:p,uv:q,moved:false};this.canvas.setPointerCapture(e.pointerId);}this.updateInfo();this.draw();return;}
+  const hit=this.snap(q,e.shiftKey);this.anchors.push({uv:hit.uv,ref:hit.ref,free:e.shiftKey});const count=this.tool==="point"?1:this.tool==="arc"?3:2;
   if(this.anchors.length===count){const tool=this.tool,points=this.anchors;this.anchors=[];this.change("sketch_draw",{tool,points,construction:$("construction").checked});}else this.draw();
  }
- move(e){if(!this.active)return;const p=this.eventPos(e);if(this.pan){this.center=[this.pan.center[0]-(p[0]-this.pan.p[0])/this.scale,this.pan.center[1]+(p[1]-this.pan.p[1])/this.scale];this.draw();return;}this.mouse=this.snap(this.uv(p),e.shiftKey);this.draw();}
+ move(e){if(!this.active)return;const p=this.eventPos(e);if(this.pan){this.center=[this.pan.center[0]-(p[0]-this.pan.p[0])/this.scale,this.pan.center[1]+(p[1]-this.pan.p[1])/this.scale];this.draw();return;}if(this.drag){this.drag.moved ||= distance(p,this.drag.start)>4;this.drag.uv=this.uv(p);this.draw();return;}this.mouse=this.snap(this.uv(p),e.shiftKey);this.draw();}
+ up(e){this.pan=null;if(!this.drag)return;const d=this.drag;this.drag=null;if(d.moved)this.change("sketch_drag",{id:d.id,uv:this.uv(this.eventPos(e))});else this.draw();}
  wheel(e){e.preventDefault();const p=this.eventPos(e),before=this.uv(p);this.scale=Math.max(.02,Math.min(10000,this.scale*Math.exp(-e.deltaY*.0015)));const after=this.uv(p);this.center=add(this.center,sub(before,after));this.draw();}
  async change(op,args={}){if(!this.active||this.busy)return;this.busy=true;this.updateInfo();try{this.state=await this.send(op,args);this.selection.clear();this.mouse=null;this.draw();}catch(e){this.status(String(e));}finally{this.busy=false;this.updateInfo();}}
- constraint(kind){const refs=[...this.selection];if(!refs.length){this.status("Выберите геометрию (Shift — несколько объектов)");return;}const args={kind,refs};if(kind==="distance"||kind==="radius"){const v=Number($("sk-value").value);if(!(v>0)){this.status("Укажите положительный размер");return;}args.value=v;}this.change("sketch_constraint",args);}
+ constraint(kind){const refs=[...this.selection];if(!refs.length){this.status("Выберите геометрию (Shift — несколько объектов)");return;}const args={kind,refs};if(["distance","hdistance","vdistance","radius","diameter"].includes(kind)){const v=Number($("sk-value").value);if(!(v>0)){this.status("Укажите положительный размер");return;}args.value=v;}this.change("sketch_constraint",args);}
  remove(){if(this.selection.size)this.change("sketch_delete",{ids:[...this.selection]});}
  async end(op){if(this.busy)return;this.busy=true;try{const result=await this.send(op);this.hide();this.finish(result);}catch(e){this.status(String(e));}finally{this.busy=false;this.updateInfo();}}
  updateInfo(){if(!this.active)return;const s=this.state;$("sk-info").textContent=Object.keys(s.draft.entities).length+" объектов · степеней свободы: "+(s.dof??"—")+" · выбрано: "+this.selection.size;
-  $("sk-constraints").replaceChildren(...s.draft.constraints.map(c=>{const div=document.createElement("div");div.textContent=c.type+(c.value!==undefined?" = "+c.value:"")+" · "+c.refs.join(", ");return div;}));$("sk-undo").disabled=this.busy||!s.undo;$("sk-finish").disabled=this.busy;$("sk-cancel").disabled=this.busy;
+  $("sk-constraints").replaceChildren(...s.draft.constraints.map(c=>{const div=document.createElement("div");div.className="constraint-row"+(s.bad.includes(c.id)?" bad":"");const label=document.createElement("span");label.textContent=c.type+" · "+c.refs.join(", ");div.append(label);if(typeof c.value==="number"&&!c.expr&&["distance","hdistance","vdistance","radius","diameter","angle"].includes(c.type)){const input=document.createElement("input");input.type="number";input.step="any";input.min="0.000001";input.value=c.value;input.title="Изменить размер";input.disabled=this.busy;input.onchange=()=>{if(input.checkValidity())this.change("sketch_dimension",{id:c.id,value:Number(input.value)});};div.append(input);}const del=document.createElement("button");del.textContent="×";del.title="Удалить ограничение";del.disabled=this.busy;del.onclick=()=>this.change("sketch_delete",{ids:[c.id]});div.append(del);return div;}));$("sk-undo").disabled=this.busy||!s.undo;$("sk-redo").disabled=this.busy||!s.redo;$("sk-finish").disabled=this.busy;$("sk-cancel").disabled=this.busy;
  }
  line(a,b,color,width=1,dash=[]){const c=this.ctx,p=this.screen(a),q=this.screen(b);c.beginPath();c.setLineDash(dash);c.strokeStyle=color;c.lineWidth=width;c.moveTo(...p);c.lineTo(...q);c.stroke();c.setLineDash([]);}
  draw(){if(!this.active||!this.state||!this.w)return;const c=this.ctx;c.fillStyle="#f6f8fb";c.fillRect(0,0,this.w,this.h);
@@ -121,7 +125,8 @@ export class SketchEditor {
   for(const [id,paths] of Object.entries(this.state.curves)){const e=entities[id];c.strokeStyle=this.selection.has(id)?"#e89116":highlighted.has(id)?"#dca527":"#20549c";c.lineWidth=this.selection.has(id)||highlighted.has(id)?2.6:1.8;c.setLineDash(e.construction?[6,4]:[]);
    for(const path of paths){if(!path.length)continue;c.beginPath();c.moveTo(...this.screen(path[0]));for(const p of path.slice(1))c.lineTo(...this.screen(p));c.stroke();}c.setLineDash([]);
   }
-  for(const [id,p] of Object.entries(points)){const q=this.screen(p);c.fillStyle=id==="origin"?"#b84545":"#2464ac";c.beginPath();c.arc(...q,id==="origin"?4:3,0,tau);c.fill();}
+  for(const [id,p] of Object.entries(points)){const q=this.screen(p);c.fillStyle=this.selection.has(id)?"#e89116":id==="origin"?"#b84545":"#2464ac";c.beginPath();c.arc(...q,id==="origin"?4:3,0,tau);c.fill();}
+  if(this.drag?.moved){this.line(points[this.drag.id],this.drag.uv,"#e89116",1,[4,4]);const q=this.screen(this.drag.uv);c.beginPath();c.arc(...q,6,0,tau);c.strokeStyle="#e89116";c.lineWidth=2;c.stroke();}
   const a=this.anchors[0]?.uv,b=this.mouse?.uv;
   if(a&&b){const color="#4186d4",dash=[5,4];if(this.tool==="rect"){const p=[b[0],a[1]],q=[a[0],b[1]];for(const [x,y] of [[a,p],[p,b],[b,q],[q,a]])this.line(x,y,color,1.5,dash);}else if(this.tool==="circle"){c.strokeStyle=color;c.setLineDash(dash);c.beginPath();c.arc(...this.screen(a),distance(a,b)*this.scale,0,tau);c.stroke();c.setLineDash([]);}else {this.line(this.anchors.at(-1).uv,b,color,1.5,dash);if(this.anchors.length===2)this.line(a,this.anchors[1].uv,color,1.5,dash);}}
   if(this.mouse?.label&&this.tool!=="select"){const q=this.screen(b);if(this.mouse.guide)this.line(this.mouse.guide,b,"#dca527",1,[4,4]);c.strokeStyle="#dca527";c.lineWidth=2;c.beginPath();c.moveTo(q[0]-6,q[1]);c.lineTo(q[0],q[1]-6);c.lineTo(q[0]+6,q[1]);c.lineTo(q[0],q[1]+6);c.closePath();c.stroke();c.font="12px system-ui";const w=c.measureText(this.mouse.label).width+12,x=Math.min(q[0]+12,this.w-w-4),y=Math.min(q[1]+12,this.h-23);c.fillStyle="#fff5d9";c.fillRect(x,y,w,22);c.fillStyle="#76530b";c.fillText(this.mouse.label,x+6,y+15);}

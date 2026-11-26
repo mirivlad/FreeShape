@@ -22,16 +22,17 @@ async function boot() {
 }
 let queue = Promise.resolve();
 onmessage = ({data}) => {
+  const {requestId,payload}=data;
   queue = queue.then(async () => {
     try {
-      if (data.op === "init") {
-        postMessage({id: data.id, result: await boot()});
+      if (payload.op === "init") {
+        postMessage({requestId, result: await boot()});
         return;
       }
-      py.globals.set("request_json", JSON.stringify(data));
-      postMessage({id: data.id, result: JSON.parse(py.runPython("dispatch(request_json)"))});
+      py.globals.set("request_json", JSON.stringify(payload));
+      postMessage({requestId, result: JSON.parse(py.runPython("dispatch(request_json)"))});
     } catch (err) {
-      postMessage({id: data.id, error: String(err)});
+      postMessage({requestId, error: String(err)});
     }
   });
 };
