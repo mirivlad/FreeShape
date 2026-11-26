@@ -9,7 +9,8 @@ This extends the existing sketch snapping system and the existing constraint sol
   away from it to see a dotted guide. Two sources can form an X/Y intersection.
 - Hover an existing line before drawing a second one to infer parallel,
   perpendicular or equal length. Hover a circle to infer equal radius.
-- Hold Shift to temporarily bypass snapping.
+- View → Smart snapping controls enablement, special points, guides,
+  automatic relationships, and sensitivity. Hold Shift to temporarily bypass snapping.
 
 ## Test cases
 1. Point/line start at a line midpoint; edit the line and verify attachment.

@@ -7,7 +7,7 @@ import os
 import sys
 
 import numpy as np
-from PySide6.QtCore import Qt, QSize, QTimer, QPoint
+from PySide6.QtCore import Qt, QSize, QTimer, QPoint, QCoreApplication
 from PySide6.QtGui import QAction, QKeySequence, QShortcut, QColor
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QToolButton, QLabel, QFrame, QSplitter, QMenu,
@@ -427,6 +427,29 @@ class MainWindow(QMainWindow):
             tm.addAction(a)
             self.theme_actions[mode] = a
         vm.addSeparator()
+        sm = submenu(vm, QCoreApplication.translate("FreeShape", "Smart snapping"))
+        for key, label in (("snap_enabled", QCoreApplication.translate("FreeShape", "Enable snapping")),
+                           ("snap_points", QCoreApplication.translate("FreeShape", "Special points")),
+                           ("snap_guides", QCoreApplication.translate("FreeShape", "Alignment guides")),
+                           ("snap_relations", QCoreApplication.translate("FreeShape", "Automatic relationships"))):
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(self.settings.value(key, True, type=bool))
+            action.toggled.connect(lambda checked, k=key: self._set_snap_option(k, checked))
+            sm.addAction(action)
+        sensitivity = submenu(sm, QCoreApplication.translate("FreeShape", "Snap sensitivity"))
+        snap_group = QActionGroup(self)
+        for px in (6, 9, 13):
+            action = QAction({6: QCoreApplication.translate("FreeShape", "Low"), 9: QCoreApplication.translate("FreeShape", "Medium"), 13: QCoreApplication.translate("FreeShape", "High")}[px], self)
+            action.setCheckable(True)
+            action.setChecked(self.settings.value("snap_radius", 9, type=int) == px)
+            action.triggered.connect(lambda _=False, v=px: self._set_snap_option("snap_radius", v))
+            snap_group.addAction(action)
+            sensitivity.addAction(action)
+        sm.addSeparator()
+        hint = sm.addAction(QCoreApplication.translate("FreeShape", "Hold Shift to temporarily disable snapping"))
+        hint.setEnabled(False)
+        vm.addSeparator()
         self._add_action(vm, "Customize the S menu…", self.customize_s_menu)
         im = submenu(vm, "Icons")
         im.addAction("Open my icons folder…", self.open_icons_folder)
@@ -650,6 +673,19 @@ class MainWindow(QMainWindow):
             a.setChecked(self.SELECT_DEFAULTS[k])
             a.blockSignals(False)
         self._selection_filter_changed()
+
+    def _set_snap_option(self, key, value):
+        self.settings.setValue(key, value)
+        self.settings.sync()
+        self._apply_snap_options()
+
+    def _apply_snap_options(self):
+        sketcher = getattr(self, "sketcher", None)
+        if sketcher is None:
+            return
+        for key in ("snap_enabled", "snap_points", "snap_guides", "snap_relations"):
+            setattr(sketcher, key, self.settings.value(key, True, type=bool))
+        sketcher.snap_radius = float(self.settings.value("snap_radius", 9, type=int))
 
     def _add_action(self, menu, text, slot, shortcut=None):
         a = QAction(text, self)
@@ -1640,6 +1676,7 @@ class MainWindow(QMainWindow):
             return
         sk = Sketch.from_dict(feat["params"]["sketch"])
         self.sketcher = Sketcher(plane, sk, feat["id"], self._sketch_changed, self._sketch_tool_changed)
+        self._apply_snap_options()
         self.sketcher.variables = dict(ctx["base"].vars)
         self.sketcher.variable_kinds = dict(getattr(ctx["base"], "var_kinds", {}))
         self.sketcher.on_new_variable = self._sketch_new_variable
