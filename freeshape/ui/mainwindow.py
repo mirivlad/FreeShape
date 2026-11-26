@@ -969,7 +969,7 @@ class MainWindow(QMainWindow):
             keys = {"coincident": " (I)", "horizontal": " (H)", "vertical": " (V)", "equal": " (E)", "tangent": " (T)",
                     "parallel": " (B)", "perpendicular": " (Shift+L)", "concentric": " (Shift+O)",
                     "midpoint": " (Shift+M)", "symmetric": " (Shift+Q)", "fix": " (Shift+J)"}
-            b = self._tb(h, name, label + keys.get(name, "") + " — " + CONSTRAINT_TOOLS[name],
+            b = self._tb(h, name, tr(label) + keys.get(name, "") + " — " + tr(CONSTRAINT_TOOLS[name]),
                          lambda _=False, n=name: self._sk_tool(n), checkable=True)
             self._sketch_buttons[name] = b
         h.addWidget(_sep())
