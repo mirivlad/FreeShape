@@ -63,3 +63,7 @@ Separate worker request correlation IDs from feature/point IDs. Added point sele
 ## 0.3.1 workbench
 
 Desktop-style menu, original QPainter icons exported at Docker build time, separate modeling/sketch toolbars, tree and parts list, floating operation dialogs. No startup demo or architectural footer. Diagnostics are in Tools. Right drag rotates; middle drag pans; left click selects. Assembly and drawing editors are not implemented. The under-constrained rectangle smoke check uses solved dimensions rather than assuming the un-dimensioned height stays fixed.
+
+## 0.3.2
+
+Finishing a new empty sketch discards the draft without adding a feature or undo entry, matching desktop behavior. Existing sketches can still be saved after edits, including deletion of geometry. Python tracebacks are logged in the browser developer console; the workspace displays concise errors. Regression tests cover empty finish/cancel and cancel of an existing sketch.

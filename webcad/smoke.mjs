@@ -19,6 +19,18 @@ try {
  assert(await page.locator("#main-tools").isVisible());assert(!(await page.locator("#sketch-tools").isVisible()));
  await page.waitForFunction(()=>[...document.querySelectorAll(".tool img,.brand img")].every(i=>i.complete&&i.naturalWidth>0));
  await page.screenshot({path:"webcad-model.png"});
+ // Finishing an untouched new sketch must return to modeling without a feature or undo entry.
+ for(const action of ["sk-finish","sk-cancel"]){
+  await page.locator("#sketch").click();
+  await page.locator("#sketch-canvas").waitFor({state:"visible"});
+  await page.locator("#"+action).click();
+  await page.locator("#sketch-canvas").waitFor({state:"hidden"});
+  await page.locator("#main-tools").waitFor({state:"visible"});
+  await noError();
+  assert.equal(await page.locator("#features button").count(),0);
+  assert(await page.locator("#undo").isDisabled());
+ }
+ console.log("PASS close empty sketch and cancel without changing document");
  await page.locator(".menu").filter({hasText:"Документ"}).locator("summary").first().click();await menuCommand("demo");await volume(12000);
  assert.equal(await page.locator("body").getAttribute("data-meshes"),"1");
  console.log("PASS native demo");
@@ -81,6 +93,13 @@ try {
  await page.locator("#extrude").click();await page.locator("#solid-value").fill("10");await page.locator("#solid-apply").click();
  const created=await save();const model=JSON.parse(created.toString());assert.equal(model.features.length,2);const pts=Object.values(model.features[0].params.sketch.points);const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);const width=Math.max(...xs)-Math.min(...xs),height=Math.max(...ys)-Math.min(...ys);assert(Math.abs(width-30)<0.01,"width constraint");const expected=width*height*10;await volume(expected,0.1);
  console.log("PASS create rectangle sketch and extrude through UI");
+ await page.locator("#features button").filter({hasText:/sketch/i}).dblclick();
+ await page.locator("#sketch-canvas").waitFor({state:"visible"});
+ await page.locator("#sk-cancel").click();
+ await page.locator("#sketch-canvas").waitFor({state:"hidden"});
+ await volume(expected,0.1);
+ assert.equal(await page.locator("#features button").count(),2);
+ console.log("PASS cancel existing sketch edit");
  await menuCommand("offline");
  await page.waitForFunction(()=>document.body.dataset.offline==="ready"||document.querySelector("#errors").textContent.trim(),{},{timeout:240000});await noError();
  await context.setOffline(true);await page.reload();await ready();await volume(0);

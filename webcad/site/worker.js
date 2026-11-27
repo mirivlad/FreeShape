@@ -30,9 +30,12 @@ onmessage = ({data}) => {
         return;
       }
       py.globals.set("request_json", JSON.stringify(payload));
-      postMessage({requestId, result: JSON.parse(py.runPython("dispatch(request_json)"))});
+      const reply=JSON.parse(py.runPython("dispatch(request_json)"));
+      if(reply.error){console.error(reply.detail);postMessage({requestId,error:reply.error});}
+      else postMessage({requestId,result:reply.result});
     } catch (err) {
-      postMessage({requestId, error: String(err)});
+      console.error(err);
+      postMessage({requestId, error: payload.op==="init"?"Не удалось загрузить ядро FreeShape":"Ошибка вычисления"});
     }
   });
 };

@@ -6,6 +6,7 @@ import math
 import pathlib
 import sys
 import time
+import traceback
 from freeshape import __version__, kernel as K, features as F
 from freeshape.document import Document
 from freeshape.sketch import Sketch
@@ -291,8 +292,10 @@ def sketch_edit(req):
 def finish_sketch():
     global draft
     s = draft["sketch"]
-    if not s.entities:
-        raise ValueError("Sketch is empty")
+    # Match desktop: discard an empty new sketch, but save edits to an existing one.
+    if not s.entities and not draft["id"]:
+        draft = None
+        return
     f = copy.deepcopy(doc.feature(draft["id"])) if draft["id"] else doc.make_feature("sketch")
     f["params"].update(plane=draft["plane"],sketch=s.to_dict())
     transaction(lambda: doc.replace_feature(f) if draft["id"] else doc.add_feature(f))
@@ -412,7 +415,16 @@ def call(request):
 
 
 def dispatch(payload):
-    return json.dumps(call(json.loads(payload)), allow_nan=False)
+    try:
+        return json.dumps({"result": call(json.loads(payload))}, allow_nan=False)
+    except Exception as exc:
+        # Keep full diagnostic detail in the developer console, not the CAD UI.
+        detail = traceback.format_exc()
+        if isinstance(exc, (ValueError, K.KernelError, RuntimeError)):
+            message = str(exc).strip() or type(exc).__name__
+        else:
+            message = "Внутренняя ошибка вычисления"
+        return json.dumps({"error": message, "detail": detail}, ensure_ascii=False)
 
 
 def runtime_info():

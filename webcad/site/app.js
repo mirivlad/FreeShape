@@ -6,7 +6,7 @@ const worker=new Worker("./worker.js");
 let seq=0,current=null,selected=null,busy=false,ready=false;
 const pending=new Map();
 function status(text){$("status").textContent=text==="Готово"?"":text;document.body.dataset.status=text;}
-function error(err){$("errors").hidden=false;$("errors").textContent=String(err);status("Ошибка — см. диагностику");console.error(String(err));}
+function error(err){const message=err instanceof Error?err.message:String(err);$("errors").hidden=false;$("errors").textContent=message;status("Ошибка");console.error(err); }
 worker.onmessage=({data})=>{
  if(data.stage){status("Загрузка…");$("hint").textContent="Загрузка…";return;}
  const p=pending.get(data.requestId);if(!p)return;pending.delete(data.requestId);
