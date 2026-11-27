@@ -82,3 +82,5 @@ Sketch length, X/Y and circular dimensions have viewport dimension lines and edi
 ## 0.3.4
 
 Fixed dimension labels remaining disabled after solving. Closed sketch areas are tessellated from native OpenCascade faces, shown in the sketch editor (toggle Show sketch regions) and in the 3D viewport for the active sketch. While creating an extrusion or revolution, click an area to select it; Shift-click toggles it. Checkboxes remain synchronized. Region IDs follow the native region list and persistent feature references still use native signatures. Tests exercise viewport selection and preview cancellation.
+
+The centre rectangle tool matches the desktop construction: four constrained sides plus a construction diagonal with a midpoint constraint. The diagonal is excluded from solid profiles but remains available for snapping. Regression tests also cover multiple independent sketch regions and extrusion of only one selected region.

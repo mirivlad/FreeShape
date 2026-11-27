@@ -199,16 +199,24 @@ def sketch_edit(req):
                     s.add_constraint("horizontal", eid)
                 elif not ps[1].get("free") and abs(s.points[a][0]-s.points[b][0]) < 1e-8:
                     s.add_constraint("vertical", eid)
-            elif tool == "rect":
+            elif tool in ("rect", "center_rect"):
                 b = point_at(s, ps[1])
                 x,y = s.points[a]
                 u,v = s.points[b]
                 if abs(x-u)<1e-8 or abs(y-v)<1e-8:
                     raise ValueError("Rectangle needs positive width and height")
+                center = a if tool == "center_rect" else None
+                if center is not None:
+                    x,y = 2*x-u,2*y-v
+                    a = s.add_point(x,y)
                 c,d = s.add_point(u,y),s.add_point(x,v)
                 ids = [s.add_line(p,q,construction) for p,q in ((a,c),(c,b),(b,d),(d,a))]
                 for eid,ctype in zip(ids, ("horizontal","vertical","horizontal","vertical")):
                     s.add_constraint(ctype,eid)
+                if center is not None:
+                    diag = s.add_line(a,b,True)
+                    s.entities[diag]["helper"] = True
+                    s.add_constraint("midpoint",center,diag)
             elif tool == "circle":
                 r = math.dist(s.points[a], ps[1]["uv"])
                 if r < 1e-8:
