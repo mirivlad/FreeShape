@@ -3,6 +3,10 @@ WORKDIR /src
 COPY webcad/fetch_runtime.py /src/
 RUN python fetch_runtime.py
 COPY freeshape /src/freeshape
+COPY webcad/export_icons.py /src/
+RUN apt-get update && apt-get install -y --no-install-recommends libegl1 libgl1 libdbus-1-3 libfontconfig1 libxkbcommon0 && rm -rf /var/lib/apt/lists/* \
+ && pip install --no-cache-dir PySide6-Essentials==6.10.2 \
+ && QT_QPA_PLATFORM=offscreen python export_icons.py
 COPY LICENSE /site/LICENSE-FreeShape
 COPY webcad/bridge.py /site/bridge.py
 COPY webcad/site/ /site/

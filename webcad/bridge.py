@@ -41,11 +41,11 @@ def summary(d):
         if p.id in d.hidden_parts:
             continue
         m = K.tessellate(p.shape)
-        meshes.append({"id": p.id, "vertices": m.verts.ravel().tolist(),
+        meshes.append({"id": p.id, "name": p.name, "vertices": m.verts.ravel().tolist(),
                        "normals": m.normals.ravel().tolist(), "triangles": m.tris.ravel().tolist(),
                        "tri_face": m.tri_face.tolist(),
                        "edges": [e.ravel().tolist() for e in m.edge_polys]})
-    return {"name": d.name, "undo": d.can_undo(), "redo": d.can_redo(), "features": [{"id": f["id"], "name": f.get("name", f["type"]),
+    return {"name": d.name, "units": d.units, "parts": [{"id": p.id, "name": p.name} for p in d.state.parts.values()], "undo": d.can_undo(), "redo": d.can_redo(), "features": [{"id": f["id"], "name": f.get("name", f["type"]),
             "type": f["type"], "depth": f.get("params", {}).get("depth"),
             "params": {k: v for k, v in f.get("params", {}).items() if k in ("depth", "radius", "distance", "op", "end", "flip", "angle")},
             "regions": len(d.state.sketches[f["id"]].regions) if f["id"] in d.state.sketches else 0,

@@ -59,3 +59,7 @@ OpenCascade, Three.js. See their upstream projects and distributed notices.
 ## 0.3.0
 
 Separate worker request correlation IDs from feature/point IDs. Added point selection and drag-on-release with native weighted solve, sketch undo/redo, editable numeric dimensions, constraint deletion, point coincidence/fix/point-on/midpoint/concentric and horizontal/vertical dimensions. Drag feedback is a local marker, not continuous constrained geometry preview. Tests exercise dimension edits and sketch history. Feature parity remains incomplete.
+
+## 0.3.1 workbench
+
+Desktop-style menu, original QPainter icons exported at Docker build time, separate modeling/sketch toolbars, tree and parts list, floating operation dialogs. No startup demo or architectural footer. Diagnostics are in Tools. Right drag rotates; middle drag pans; left click selects. Assembly and drawing editors are not implemented. The under-constrained rectangle smoke check uses solved dimensions rather than assuming the un-dimensioned height stays fixed.
