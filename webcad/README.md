@@ -74,3 +74,7 @@ Desktop-style menu, original QPainter icons exported at Docker build time, separ
 ## 0.3.2
 
 Finishing a new empty sketch discards the draft without adding a feature or undo entry, matching desktop behavior. Existing sketches can still be saved after edits, including deletion of geometry. Python tracebacks are logged in the browser developer console; the workspace displays concise errors. Regression tests cover empty finish/cancel and cancel of an existing sketch.
+
+## 0.3.3
+
+Sketch length, X/Y and circular dimensions have viewport dimension lines and editable labels, with Escape to cancel. Solid creation uses the native preview API with debounced requests and stale-result rejection. Preview geometry is separate from committed bodies and does not create undo entries. The committed geometry is still rebuilt by the native feature operation. Angular annotations and custom placement of dimension lines are not included yet.

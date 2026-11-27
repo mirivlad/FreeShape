@@ -36,16 +36,21 @@ def demo():
     return d
 
 
-def summary(d):
+def state_meshes(state, hidden=()):
     meshes = []
-    for p in d.state.parts.values():
-        if p.id in d.hidden_parts:
+    for p in state.parts.values():
+        if p.id in hidden:
             continue
         m = K.tessellate(p.shape)
         meshes.append({"id": p.id, "name": p.name, "vertices": m.verts.ravel().tolist(),
                        "normals": m.normals.ravel().tolist(), "triangles": m.tris.ravel().tolist(),
                        "tri_face": m.tri_face.tolist(),
                        "edges": [e.ravel().tolist() for e in m.edge_polys]})
+    return meshes
+
+
+def summary(d):
+    meshes = state_meshes(d.state, d.hidden_parts)
     return {"name": d.name, "units": d.units, "parts": [{"id": p.id, "name": p.name} for p in d.state.parts.values()], "undo": d.can_undo(), "redo": d.can_redo(), "features": [{"id": f["id"], "name": f.get("name", f["type"]),
             "type": f["type"], "depth": f.get("params", {}).get("depth"),
             "params": {k: v for k, v in f.get("params", {}).items() if k in ("depth", "radius", "distance", "op", "end", "flip", "angle")},
@@ -302,7 +307,7 @@ def finish_sketch():
     draft = None
 
 
-def add_solid(req):
+def build_solid(req):
     kind = req["kind"]
     if kind not in ("extrude","revolve","fillet","chamfer"):
         raise ValueError("Unsupported feature")
@@ -334,6 +339,25 @@ def add_solid(req):
             raise ValueError("Select model edges")
         p["edges"] = [subref(item,"edge")[2] for item in picks]
         p["radius" if kind=="fillet" else "distance"] = number(req["value"],1e-8)
+    return f
+
+
+def preview_solid(req):
+    # A preview must not consume persistent IDs or create undo history.
+    counter = doc._counter
+    try:
+        f = build_solid(req)
+        state, error = doc.preview(f, doc.insert_index())
+        if error:
+            raise ValueError(str(error))
+        return {"meshes": state_meshes(state, doc.hidden_parts),
+                "volume": sum(float(K.volume(p.shape)) for p in state.parts.values())}
+    finally:
+        doc._counter = counter
+
+
+def add_solid(req):
+    f = build_solid(req)
     transaction(lambda: doc.add_feature(f))
 
 
@@ -376,6 +400,8 @@ def call(request):
         finish_sketch()
     elif op == "sketch_cancel":
         draft = None
+    elif op == "solid_preview":
+        return preview_solid(request)
     elif op == "solid":
         add_solid(request)
     elif op == "undo":

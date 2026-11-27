@@ -17,8 +17,9 @@ function call(op,args={}){return new Promise((resolve,reject)=>{const id=++seq;p
 const scene=new THREE.Scene();scene.background=new THREE.Color(0x6d7680);
 const camera=new THREE.OrthographicCamera(-65,65,65,-65,0.1,1e7);camera.position.set(120,-150,110);camera.up.set(0,0,1);
 let renderer,controls,frame=0,span=130,renderCount=0;
-const group=new THREE.Group(),highlight=new THREE.Group();scene.add(group,highlight);
+const group=new THREE.Group(),highlight=new THREE.Group(),previewGroup=new THREE.Group();scene.add(group,highlight,previewGroup);
 const raycaster=new THREE.Raycaster(),mouse=new THREE.Vector2();let pickables=[],edgeData=[],facePick=null,edgePicks=[],solidKind=null,partPick=null;
+let previewTimer=0,previewVersion=0,previewInFlight=false,previewQueued=false,previewFitted=false;
 function invalidate(){if(!renderer||frame)return;frame=requestAnimationFrame(()=>{frame=0;renderer.render(scene,camera);document.body.dataset.renders=String(++renderCount);document.body.dataset.camera=JSON.stringify({position:camera.position.toArray(),target:controls.target.toArray()});});}
 try{
  renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:"high-performance"});renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));$("view").prepend(renderer.domElement);
@@ -30,12 +31,12 @@ scene.add(new THREE.HemisphereLight(0xffffff,0x879ab1,2.2));
 const light=new THREE.DirectionalLight(0xffffff,2);light.position.set(80,-100,180);scene.add(light);
 function resize(){if(!renderer)return;const w=Math.max(1,$("view").clientWidth),h=Math.max(1,$("view").clientHeight),a=w/h;camera.left=-span*a/2;camera.right=span*a/2;camera.top=span/2;camera.bottom=-span/2;camera.updateProjectionMatrix();renderer.setSize(w,h);invalidate();}
 new ResizeObserver(resize).observe($("view"));
-function fit(){if(!controls)return;const box=new THREE.Box3().setFromObject(group);if(box.isEmpty())return;const c=box.getCenter(new THREE.Vector3()),size=box.getSize(new THREE.Vector3()).length(),direction=camera.position.clone().sub(controls.target).normalize();span=Math.max(size*1.45,1);camera.zoom=1;controls.target.copy(c);camera.position.copy(c).addScaledVector(direction,Math.max(size*2,10));resize();controls.update();invalidate();}
+function fit(){if(!controls)return;const box=new THREE.Box3().setFromObject(previewGroup.children.length?previewGroup:group);if(box.isEmpty())return;const c=box.getCenter(new THREE.Vector3()),size=box.getSize(new THREE.Vector3()).length(),direction=camera.position.clone().sub(controls.target).normalize();span=Math.max(size*1.45,1);camera.zoom=1;controls.target.copy(c);camera.position.copy(c).addScaledVector(direction,Math.max(size*2,10));resize();controls.update();invalidate();}
 function view(name){if(!controls)return;const d={iso:[1,-1,1],top:[0,0,1],front:[0,-1,0],right:[1,0,0]}[name];camera.up.set(0,name==="top"?1:0,name==="top"?0:1);camera.position.copy(controls.target).addScaledVector(new THREE.Vector3(...d).normalize(),Math.max(camera.position.distanceTo(controls.target),10));controls.update();invalidate();}
 function dispose(g){for(const item of [...g.children]){item.geometry.dispose();item.material.dispose();g.remove(item);}}
 function lineGeometry(v){const g=new THREE.BufferGeometry();g.setAttribute("position",new THREE.Float32BufferAttribute(v,3));return g;}
 function segments(v,out){for(let i=3;i<v.length;i+=3)out.push(...v.slice(i-3,i),...v.slice(i,i+3));}
-function clearSelection(){facePick=null;edgePicks=[];partPick=null;updateSelection();}
+function clearSelection(){facePick=null;edgePicks=[];partPick=null;updateSelection();schedulePreview();}
 function updateSelection(){dispose(highlight);for(const m of pickables)m.material.color.setHex(m.userData.part===partPick?0xeaa626:0xb9c8db);for(const b of $("parts").children)b.classList.toggle("selected",b.dataset.part===partPick);
  for(const p of edgePicks){const e=edgeData.find(x=>x.part===p.part&&x.index===p.index);if(e)highlight.add(new THREE.Line(lineGeometry(e.v),new THREE.LineBasicMaterial({color:0xe79616,depthTest:false})));}
  if(facePick){const m=pickables.find(x=>x.userData.part===facePick.part);if(m){const pos=m.geometry.attributes.position.array,idx=m.geometry.index.array,tri=m.userData.tri_face,v=[];for(let i=0;i<tri.length;i++)if(tri[i]===facePick.index)for(let j=0;j<3;j++){const a=idx[i*3+j]*3;v.push(pos[a],pos[a+1],pos[a+2]);}if(v.length){const g=lineGeometry(v);g.computeVertexNormals();highlight.add(new THREE.Mesh(g,new THREE.MeshBasicMaterial({color:0xeaa626,transparent:true,opacity:.45,side:THREE.DoubleSide,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-2})));}}}
@@ -51,12 +52,12 @@ function pick(e){if(!current||sketchEditor.active||busy||!renderer)return;const 
   for(const edge of edgeData)for(let i=3;i<edge.v.length;i+=3){const a=screen(...edge.v.slice(i-3,i)),b=screen(...edge.v.slice(i,i+3)),dx=b[0]-a[0],dy=b[1]-a[1],t=Math.max(0,Math.min(1,((q[0]-a[0])*dx+(q[1]-a[1])*dy)/Math.max(dx*dx+dy*dy,1e-9))),d=Math.hypot(q[0]-a[0]-t*dx,q[1]-a[1]-t*dy),z=a[2]+t*(b[2]-a[2]);if(d<8&&(!best||d<best.d-1||(Math.abs(d-best.d)<=1&&z<best.z)))best={part:edge.part,index:edge.index,d,z};}
   facePick=null;if(!e.shiftKey)edgePicks=[];if(best){const i=edgePicks.findIndex(p=>p.part===best.part&&p.index===best.index);if(i>=0)edgePicks.splice(i,1);else edgePicks.push({part:best.part,index:best.index});}
  }else{edgePicks=[];const hit=raycaster.intersectObjects(pickables,false)[0];facePick=hit?{part:hit.object.userData.part,index:hit.object.userData.tri_face[hit.faceIndex]}:null;if(facePick?.index===undefined)facePick=null;}
- updateSelection();
+ updateSelection();schedulePreview();
 }
 let down=null;
 if(renderer){renderer.domElement.addEventListener("pointerdown",e=>{down=[e.clientX,e.clientY,e.button];});renderer.domElement.addEventListener("pointerup",e=>{if(down&&down[2]===0&&Math.hypot(e.clientX-down[0],e.clientY-down[1])<4)pick(e);down=null;});}
 function renderModel(result,refit=false){
- current=result;dispose(group);dispose(highlight);pickables=[];edgeData=[];facePick=null;edgePicks=[];partPick=null;
+ clearPreview();current=result;dispose(group);dispose(highlight);pickables=[];edgeData=[];facePick=null;edgePicks=[];partPick=null;
  for(const m of result.meshes){
   const g=lineGeometry(m.vertices);g.setIndex(m.triangles);
   if(m.normals.length===m.vertices.length)g.setAttribute("normal",new THREE.Float32BufferAttribute(m.normals,3));else g.computeVertexNormals();
@@ -85,19 +86,47 @@ function buttons(){const active=sketchEditor?.active;
  }
  $("main-tools").hidden=!!active;
 }
-async function request(op,args={}){if(busy)throw Error("Вычисление уже выполняется");if(sketchEditor.active&&!op.startsWith("sketch_"))throw Error("Сначала завершите эскиз");busy=true;buttons();$("errors").textContent="";$("errors").hidden=true;status("Вычисление…");try{const r=await call(op,args);status("Готово");return r;}catch(e){error(e);throw e;}finally{busy=false;buttons();}}
+async function request(op,args={}){if(busy)throw Error("Вычисление уже выполняется");if(solidKind&&op!=="solid")closeSolid();if(sketchEditor.active&&!op.startsWith("sketch_"))throw Error("Сначала завершите эскиз");busy=true;buttons();$("errors").textContent="";$("errors").hidden=true;status("Вычисление…");try{const r=await call(op,args);status("Готово");return r;}catch(e){error(e);throw e;}finally{busy=false;buttons();}}
 async function run(op,args={},refit=false){try{const r=await request(op,args);if(r.file!==undefined){const bytes=op==="export"?Uint8Array.from(atob(r.file),c=>c.charCodeAt(0)):r.file;const url=URL.createObjectURL(new Blob([bytes],{type:"application/octet-stream"}));const a=document.createElement("a");a.href=url;a.download=r.name;a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);}else{if(["open","demo","new"].includes(op))selected=null;renderModel(r,refit);}return r;}catch(e){return null;}}
 const sketchEditor=new SketchEditor(request,result=>{renderModel(result,true);buttons();},error);
 async function startSketch(id=null){if(busy||sketchEditor.active)return;try{const args=id?{id}:facePick?{face:facePick}:{plane:$("plane").value};const result=await request("begin_sketch",args);$("edit").hidden=true;$("solid-dialog").hidden=true;solidKind=null;sketchEditor.show(result);$("hint").textContent="";buttons();}catch(e){}}
 function fillRegions(){const f=current.features.find(x=>x.id===$("solid-sketch").value);$("solid-regions").replaceChildren();for(let i=0;i<(f?.regions||0);i++){const l=document.createElement("label"),c=document.createElement("input");c.type="checkbox";c.value=i;c.checked=true;l.append(c,"Область "+(i+1));$("solid-regions").append(l);}}
-function openSolid(kind){$("edit").hidden=true;solidKind=kind;$("solid-icon").src="icons/"+kind+".png";const profile=kind==="extrude"||kind==="revolve";$("solid-title").textContent={extrude:"Выдавливание",revolve:"Вращение",fillet:"Скругление",chamfer:"Фаска"}[kind];
+function openSolid(kind){closeSolid();$("edit").hidden=true;solidKind=kind;$("solid-icon").src="icons/"+kind+".png";const profile=kind==="extrude"||kind==="revolve";$("solid-title").textContent={extrude:"Выдавливание",revolve:"Вращение",fillet:"Скругление",chamfer:"Фаска"}[kind];
  $("solid-sketch-label").hidden=!profile;$("solid-regions").hidden=!profile;$("solid-op-label").hidden=!profile;$("solid-axis-label").hidden=kind!=="revolve";$("solid-flip-label").hidden=!profile;
  $("solid-value-label").textContent=kind==="revolve"?"Угол, °":kind==="fillet"?"Радиус, мм":kind==="chamfer"?"Размер фаски, мм":"Глубина, мм";$("solid-value").value=kind==="revolve"?360:profile?10:1;$("solid-flip").checked=false;
  if(profile){$("solid-sketch").replaceChildren(...current.features.filter(f=>f.regions>0).map(f=>new Option(f.name,f.id)));if(selectedFeature()?.regions)$("solid-sketch").value=selected;fillRegions();$("solid-op").value=current.meshes.length?"add":"new";$("solid-hint").textContent="";}else{$("edge-mode").checked=true;updateSelection();}
- $("solid-dialog").hidden=false;}
-$("solid-sketch").onchange=fillRegions;
-$("solid-cancel").onclick=()=>{$("solid-dialog").hidden=true;solidKind=null;};
-$("solid-dialog").onsubmit=async e=>{e.preventDefault();const kind=solidKind,args={kind,value:Number($("solid-value").value),sketch:$("solid-sketch").value,regions:[...$("solid-regions").querySelectorAll("input:checked")].map(x=>Number(x.value)),operation:$("solid-op").value,axis:$("solid-axis").value,flip:$("solid-flip").checked,edges:edgePicks};const r=await run("solid",args,true);if(r){$("solid-dialog").hidden=true;solidKind=null;}};
+ $("solid-dialog").hidden=false;previewFitted=false;schedulePreview();}
+function solidArgs(){return {kind:solidKind,value:Number($("solid-value").value),sketch:$("solid-sketch").value,regions:[...$("solid-regions").querySelectorAll("input:checked")].map(x=>Number(x.value)),operation:$("solid-op").value,axis:$("solid-axis").value,flip:$("solid-flip").checked,edges:edgePicks.map(p=>({...p}))};}
+function clearPreview(){clearTimeout(previewTimer);previewVersion++;previewQueued=false;dispose(previewGroup);group.visible=true;delete document.body.dataset.previewVolume;$("preview-error").hidden=true;invalidate();}
+function closeSolid(){clearPreview();solidKind=null;$("solid-dialog").hidden=true;}
+function schedulePreview(){if(!solidKind||$("solid-dialog").hidden||busy)return;clearTimeout(previewTimer);previewVersion++;previewQueued=true;previewTimer=setTimeout(renderPreview,120);}
+async function renderPreview(){
+ if(previewInFlight||!previewQueued||!solidKind||busy)return;
+ previewQueued=false;const version=previewVersion,args=solidArgs();
+ if(!(args.value>0)||(["fillet","chamfer"].includes(args.kind)?!args.edges.length:!args.regions.length)){clearPreview();return;}
+ previewInFlight=true;
+ try{
+  const result=await call("solid_preview",args);
+  if(version!==previewVersion||!solidKind||busy)return;
+  dispose(previewGroup);
+  for(const m of result.meshes){
+   const g=lineGeometry(m.vertices);g.setIndex(m.triangles);
+   if(m.normals.length===m.vertices.length)g.setAttribute("normal",new THREE.Float32BufferAttribute(m.normals,3));else g.computeVertexNormals();
+   previewGroup.add(new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:0xeac88d,roughness:.7,side:THREE.DoubleSide})));
+   const edges=[];for(const v of m.edges)segments(v,edges);
+   if(edges.length)previewGroup.add(new THREE.LineSegments(lineGeometry(edges),new THREE.LineBasicMaterial({color:0x69562f})));
+  }
+  group.visible=false;$("preview-error").hidden=true;document.body.dataset.previewVolume=String(result.volume);
+  if(!current.meshes.length&&!previewFitted){previewFitted=true;fit();}
+  invalidate();
+ }catch(e){if(version===previewVersion&&solidKind&&!busy){dispose(previewGroup);group.visible=true;delete document.body.dataset.previewVolume;$("preview-error").textContent=e.message;$("preview-error").hidden=false;invalidate();}}
+ finally{previewInFlight=false;if(previewQueued&&solidKind&&!busy)renderPreview();}
+}
+$("solid-sketch").onchange=()=>{fillRegions();schedulePreview();};
+$("solid-dialog").addEventListener("input",schedulePreview);
+$("solid-dialog").addEventListener("change",schedulePreview);
+$("solid-cancel").onclick=closeSolid;
+$("solid-dialog").onsubmit=async e=>{e.preventDefault();const args=solidArgs();clearPreview();const r=await run("solid",args,true);if(r)closeSolid();else schedulePreview();};
 $("new").onclick=()=>run("new",{},true);$("demo").onclick=()=>run("demo",{},true);$("open").onclick=()=>$("file").click();
 $("file").onchange=async()=>{const f=$("file").files[0];if(f){if(f.size>100*1024*1024)error("Файл больше 100 МиБ");else await run("open",{content:await f.text()},true);}$("file").value="";};
 $("save").onclick=()=>run("save");$("step").onclick=()=>run("export",{format:"step"});$("stl").onclick=()=>run("export",{format:"stl"});$("rebuild").onclick=()=>run("rebuild");$("fit").onclick=fit;
