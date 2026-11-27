@@ -4,7 +4,7 @@ COPY webcad/fetch_runtime.py /src/
 RUN python fetch_runtime.py
 COPY freeshape /src/freeshape
 COPY webcad/export_icons.py /src/
-RUN apt-get update && apt-get install -y --no-install-recommends libegl1 libgl1 libdbus-1-3 libfontconfig1 libxkbcommon0 && rm -rf /var/lib/apt/lists/* \
+RUN apt-get update && apt-get install -y --no-install-recommends libegl1 libgl1 libdbus-1-3 libfontconfig1 libxkbcommon0 libglib2.0-0t64 fonts-dejavu-core && rm -rf /var/lib/apt/lists/* \
  && pip install --no-cache-dir PySide6-Essentials==6.10.2 \
  && QT_QPA_PLATFORM=offscreen python export_icons.py
 COPY LICENSE /site/LICENSE-FreeShape

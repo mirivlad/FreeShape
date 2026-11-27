@@ -34,6 +34,13 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Verify actual CAD in browser
         run: node webcad/smoke.mjs
+      - name: Upload UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webcad-workbench
+          path: webcad-*.png
+          if-no-files-found: ignore
       - name: Check branch tip before publication
         id: tip
         run: |

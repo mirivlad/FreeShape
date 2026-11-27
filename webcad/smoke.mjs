@@ -16,6 +16,9 @@ try {
  async function open(data){await page.locator("#file").setInputFiles({name:"test.fshape",mimeType:"application/json",buffer:data});}
  await page.goto(process.env.CAD_URL||"http://localhost:8086");
  await ready();await volume(0);
+ assert(await page.locator("#main-tools").isVisible());assert(!(await page.locator("#sketch-tools").isVisible()));
+ await page.waitForFunction(()=>[...document.querySelectorAll(".tool img,.brand img")].every(i=>i.complete&&i.naturalWidth>0));
+ await page.screenshot({path:"webcad-model.png"});
  await page.locator(".menu").filter({hasText:"Документ"}).locator("summary").first().click();await menuCommand("demo");await volume(12000);
  assert.equal(await page.locator("body").getAttribute("data-meshes"),"1");
  console.log("PASS native demo");
@@ -47,6 +50,8 @@ try {
  console.log("PASS STEP and STL");
  await menuCommand("new");await volume(0);
  await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});
+ assert(await page.locator("#sketch-tools").isVisible());assert(!(await page.locator("#main-tools").isVisible()));assert(await page.locator(".tree-panel").isVisible());
+ await page.screenshot({path:"webcad-sketch.png"});
  await page.locator('[data-tool="rect"]').click();
  await page.waitForTimeout(150);
  const sk=await page.locator("#sketch-canvas").boundingBox(),unit=Math.min(sk.width,sk.height)/100;
@@ -72,7 +77,7 @@ try {
  await page.locator("#sk-undo").click();
  await page.waitForFunction(()=>document.querySelector("#sk-constraints input")?.value==="30");
  console.log("PASS editable sketch dimension and sketch undo/redo");
- await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});
+ await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});assert(await page.locator("#main-tools").isVisible());
  await page.locator("#extrude").click();await page.locator("#solid-value").fill("10");await page.locator("#solid-apply").click();
  const created=await save();const model=JSON.parse(created.toString());assert.equal(model.features.length,2);const pts=Object.values(model.features[0].params.sketch.points);const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);const width=Math.max(...xs)-Math.min(...xs),height=Math.max(...ys)-Math.min(...ys);assert(Math.abs(width-30)<0.01,"width constraint");const expected=width*height*10;await volume(expected,0.1);
  console.log("PASS create rectangle sketch and extrude through UI");
