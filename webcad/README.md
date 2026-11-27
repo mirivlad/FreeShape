@@ -78,3 +78,7 @@ Finishing a new empty sketch discards the draft without adding a feature or undo
 ## 0.3.3
 
 Sketch length, X/Y and circular dimensions have viewport dimension lines and editable labels, with Escape to cancel. Solid creation uses the native preview API with debounced requests and stale-result rejection. Preview geometry is separate from committed bodies and does not create undo entries. The committed geometry is still rebuilt by the native feature operation. Angular annotations and custom placement of dimension lines are not included yet.
+
+## 0.3.4
+
+Fixed dimension labels remaining disabled after solving. Closed sketch areas are tessellated from native OpenCascade faces, shown in the sketch editor (toggle Show sketch regions) and in the 3D viewport for the active sketch. While creating an extrusion or revolution, click an area to select it; Shift-click toggles it. Checkboxes remain synchronized. Region IDs follow the native region list and persistent feature references still use native signatures. Tests exercise viewport selection and preview cancellation.

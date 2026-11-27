@@ -71,6 +71,8 @@ try {
  await page.mouse.click(sk.x+sk.width/2+30*unit,sk.y+sk.height/2-20*unit);
  await page.waitForFunction(()=>document.querySelector("#sk-info").textContent.includes("4 объектов")||document.querySelector("#errors").textContent.trim());
  await noError();
+ assert(await page.locator("#sk-show-regions").isChecked());
+ await page.locator("#sk-show-regions").uncheck();await page.locator("#sk-show-regions").check();
  // Select top edge midpoint, add a length, edit it, undo and redo.
  await page.locator('[data-tool="select"]').click();
  await page.mouse.click(sk.x+sk.width/2+15*unit,sk.y+sk.height/2-20*unit);
@@ -102,7 +104,17 @@ try {
  await page.waitForFunction(()=>Number(document.body.dataset.previewVolume)>0);
  assert.equal(await page.locator("#features button").count(),1);
  assert.equal(Number(await page.locator("body").getAttribute("data-volume")),0);
+ assert.equal(await page.locator("body").getAttribute("data-regions"),"1");
  const pv=Number(await page.locator("body").getAttribute("data-preview-volume"));
+ await page.locator('[data-view="top"]').click();await page.locator("#fit").click();
+ const vp=await page.locator("#view canvas:not(#sketch-canvas)").boundingBox();
+ await page.keyboard.down("Shift");await page.mouse.click(vp.x+vp.width/2,vp.y+vp.height/2);await page.keyboard.up("Shift");
+ assert(!(await page.locator("#solid-regions input").isChecked()));
+ await page.waitForFunction(()=>document.body.dataset.previewVolume===undefined);
+ await page.mouse.click(vp.x+vp.width/2,vp.y+vp.height/2);
+ assert(await page.locator("#solid-regions input").isChecked());
+ await page.waitForFunction(pv=>Math.abs(Number(document.body.dataset.previewVolume)-pv)<.1,pv);
+ console.log("PASS viewport region picking");
  await page.locator("#solid-value").fill("20");
  await page.waitForFunction(pv=>Math.abs(Number(document.body.dataset.previewVolume)-pv*2)<.1,pv);
  await page.locator("#solid-cancel").click();

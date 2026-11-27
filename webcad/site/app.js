@@ -17,7 +17,7 @@ function call(op,args={}){return new Promise((resolve,reject)=>{const id=++seq;p
 const scene=new THREE.Scene();scene.background=new THREE.Color(0x6d7680);
 const camera=new THREE.OrthographicCamera(-65,65,65,-65,0.1,1e7);camera.position.set(120,-150,110);camera.up.set(0,0,1);
 let renderer,controls,frame=0,span=130,renderCount=0;
-const group=new THREE.Group(),highlight=new THREE.Group(),previewGroup=new THREE.Group();scene.add(group,highlight,previewGroup);
+const group=new THREE.Group(),highlight=new THREE.Group(),previewGroup=new THREE.Group(),regionGroup=new THREE.Group();scene.add(group,highlight,previewGroup,regionGroup);
 const raycaster=new THREE.Raycaster(),mouse=new THREE.Vector2();let pickables=[],edgeData=[],facePick=null,edgePicks=[],solidKind=null,partPick=null;
 let previewTimer=0,previewVersion=0,previewInFlight=false,previewQueued=false,previewFitted=false;
 function invalidate(){if(!renderer||frame)return;frame=requestAnimationFrame(()=>{frame=0;renderer.render(scene,camera);document.body.dataset.renders=String(++renderCount);document.body.dataset.camera=JSON.stringify({position:camera.position.toArray(),target:controls.target.toArray()});});}
@@ -31,7 +31,7 @@ scene.add(new THREE.HemisphereLight(0xffffff,0x879ab1,2.2));
 const light=new THREE.DirectionalLight(0xffffff,2);light.position.set(80,-100,180);scene.add(light);
 function resize(){if(!renderer)return;const w=Math.max(1,$("view").clientWidth),h=Math.max(1,$("view").clientHeight),a=w/h;camera.left=-span*a/2;camera.right=span*a/2;camera.top=span/2;camera.bottom=-span/2;camera.updateProjectionMatrix();renderer.setSize(w,h);invalidate();}
 new ResizeObserver(resize).observe($("view"));
-function fit(){if(!controls)return;const box=new THREE.Box3().setFromObject(previewGroup.children.length?previewGroup:group);if(box.isEmpty())return;const c=box.getCenter(new THREE.Vector3()),size=box.getSize(new THREE.Vector3()).length(),direction=camera.position.clone().sub(controls.target).normalize();span=Math.max(size*1.45,1);camera.zoom=1;controls.target.copy(c);camera.position.copy(c).addScaledVector(direction,Math.max(size*2,10));resize();controls.update();invalidate();}
+function fit(){if(!controls)return;const box=new THREE.Box3().setFromObject(previewGroup.children.length?previewGroup:group);if(!previewGroup.children.length)box.expandByObject(regionGroup);if(box.isEmpty())return;const c=box.getCenter(new THREE.Vector3()),size=box.getSize(new THREE.Vector3()).length(),direction=camera.position.clone().sub(controls.target).normalize();span=Math.max(size*1.45,1);camera.zoom=1;controls.target.copy(c);camera.position.copy(c).addScaledVector(direction,Math.max(size*2,10));resize();controls.update();invalidate();}
 function view(name){if(!controls)return;const d={iso:[1,-1,1],top:[0,0,1],front:[0,-1,0],right:[1,0,0]}[name];camera.up.set(0,name==="top"?1:0,name==="top"?0:1);camera.position.copy(controls.target).addScaledVector(new THREE.Vector3(...d).normalize(),Math.max(camera.position.distanceTo(controls.target),10));controls.update();invalidate();}
 function dispose(g){for(const item of [...g.children]){item.geometry.dispose();item.material.dispose();g.remove(item);}}
 function lineGeometry(v){const g=new THREE.BufferGeometry();g.setAttribute("position",new THREE.Float32BufferAttribute(v,3));return g;}
@@ -44,8 +44,33 @@ function updateSelection(){dispose(highlight);for(const m of pickables)m.materia
  if(solidKind==="fillet"||solidKind==="chamfer")$("solid-hint").textContent="Рёбра: "+edgePicks.length;
  invalidate();
 }
+function profileMode(){return solidKind==="extrude"||solidKind==="revolve";}
+function regionSketch(){return profileMode()?$("solid-sketch").value:selectedFeature()?.type==="sketch"?selected:!current?.meshes.length?current?.features.filter(f=>f.regions>0&&!f.suppressed).at(-1)?.id:null;}
+function drawRegions(){
+ dispose(regionGroup);const fid=regionSketch(),regions=current?.sketch_regions?.[fid]||[];
+ const checked=new Set([...$("solid-regions").querySelectorAll("input:checked")].map(x=>Number(x.value)));
+ for(let i=0;i<regions.length;i++){
+  const r=regions[i],g=lineGeometry(r.vertices.flat());g.setIndex(r.triangles.flat());
+  const active=profileMode()&&checked.has(i);
+  const mesh=new THREE.Mesh(g,new THREE.MeshBasicMaterial({color:active?0xe8b34c:0x8dbde8,opacity:active?.38:.22,transparent:true,side:THREE.DoubleSide,depthWrite:false,depthTest:!profileMode(),polygonOffset:true,polygonOffsetFactor:-2}));
+  mesh.userData={region:i,sketch:fid};mesh.renderOrder=4;regionGroup.add(mesh);
+  const lines=[];for(const v of r.edges)segments(v,lines);
+  if(lines.length){const edge=new THREE.LineSegments(lineGeometry(lines),new THREE.LineBasicMaterial({color:active?0xf8cf80:0x9fcfff,depthTest:!profileMode()}));edge.renderOrder=5;regionGroup.add(edge);}
+ }
+ document.body.dataset.regions=String(regions.length);invalidate();
+}
+function pickRegion(e){
+ if(!profileMode())return false;
+ const hit=raycaster.intersectObjects(regionGroup.children.filter(x=>x.isMesh),false)[0];if(!hit)return false;
+ const index=hit.object.userData.region;
+ const boxes=[...$("solid-regions").querySelectorAll("input")],box=boxes.find(x=>Number(x.value)===index);
+ if(!box)return false;
+ if(e.shiftKey)box.checked=!box.checked;
+ else for(const b of boxes)b.checked=b===box;
+ drawRegions();schedulePreview();return true;
+}
 function pick(e){if(!current||sketchEditor.active||busy||!renderer)return;const r=renderer.domElement.getBoundingClientRect();mouse.set((e.clientX-r.left)/r.width*2-1,-(e.clientY-r.top)/r.height*2+1);
- partPick=null;camera.updateMatrixWorld();raycaster.setFromCamera(mouse,camera);
+ partPick=null;camera.updateMatrixWorld();raycaster.setFromCamera(mouse,camera);if(pickRegion(e))return;
  if($("edge-mode").checked){
   const q=[e.clientX-r.left,e.clientY-r.top];let best=null;
   const screen=(x,y,z)=>{const p=new THREE.Vector3(x,y,z).project(camera);return [(p.x+1)*r.width/2,(1-p.y)*r.height/2,p.z];};
@@ -78,7 +103,7 @@ function treeButton(kind,label){const b=document.createElement("button"),img=doc
 const ICON_NAMES=new Set(["part","origin","plane","sketch","extrude","revolve","fillet","chamfer","undo","redo","line","rect","circle","arc3","point","construction","dimension","horizontal","vertical","parallel","perpendicular","equal","fix","coincident","midpoint","concentric","delete","fit","iso","finish_sketch","error","select","history","folder","variable","hole","thread","shell","sweep","loft","mirror","boolean","split","move","linear_pattern","circular_pattern","derived","configs","offset_surface","thicken","rib","draft","delete_face","move_face","bounding_box","compound","explode_part","helix","measure_value","mate_connector","sm_base","sm_flange","ellipse","spline","center_rect","arc_center","sk_fillet","sk_chamfer","trim","use","offset","slot","sk_mirror","sk_lpattern","sk_cpattern"]);
 function filterTree(){const q=$("feature-filter").value.toLowerCase();for(const b of $("features").children)b.hidden=!b.textContent.toLowerCase().includes(q);}
 function selectedFeature(){return current?.features.find(x=>x.id===selected);}
-function selectFeature(){const f=selectedFeature();$("feature-actions").hidden=!f;$("edit-sketch").hidden=f?.type!=="sketch";$("suppress").textContent=f?.suppressed?"Восстановить":"Подавить";$("edit").hidden=sketchEditor.active||!(f?.type==="extrude"&&typeof f.depth==="number");if(!$("edit").hidden)$("depth").value=f.depth;buttons();}
+function selectFeature(){const f=selectedFeature();$("feature-actions").hidden=!f;$("edit-sketch").hidden=f?.type!=="sketch";$("suppress").textContent=f?.suppressed?"Восстановить":"Подавить";$("edit").hidden=sketchEditor.active||!(f?.type==="extrude"&&typeof f.depth==="number");if(!$("edit").hidden)$("depth").value=f.depth;drawRegions();buttons();}
 function buttons(){const active=sketchEditor?.active;
  for(const id of ["new","demo","open","save","step","stl","rebuild","fit","apply","sketch","extrude","revolve","fillet","chamfer","undo","redo"]){
   const needsDoc=!["new","demo","open"].includes(id);
@@ -90,15 +115,15 @@ async function request(op,args={}){if(busy)throw Error("Вычисление у�
 async function run(op,args={},refit=false){try{const r=await request(op,args);if(r.file!==undefined){const bytes=op==="export"?Uint8Array.from(atob(r.file),c=>c.charCodeAt(0)):r.file;const url=URL.createObjectURL(new Blob([bytes],{type:"application/octet-stream"}));const a=document.createElement("a");a.href=url;a.download=r.name;a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);}else{if(["open","demo","new"].includes(op))selected=null;renderModel(r,refit);}return r;}catch(e){return null;}}
 const sketchEditor=new SketchEditor(request,result=>{renderModel(result,true);buttons();},error);
 async function startSketch(id=null){if(busy||sketchEditor.active)return;try{const args=id?{id}:facePick?{face:facePick}:{plane:$("plane").value};const result=await request("begin_sketch",args);$("edit").hidden=true;$("solid-dialog").hidden=true;solidKind=null;sketchEditor.show(result);$("hint").textContent="";buttons();}catch(e){}}
-function fillRegions(){const f=current.features.find(x=>x.id===$("solid-sketch").value);$("solid-regions").replaceChildren();for(let i=0;i<(f?.regions||0);i++){const l=document.createElement("label"),c=document.createElement("input");c.type="checkbox";c.value=i;c.checked=true;l.append(c,"Область "+(i+1));$("solid-regions").append(l);}}
+function fillRegions(){const f=current.features.find(x=>x.id===$("solid-sketch").value);$("solid-regions").replaceChildren();for(let i=0;i<(f?.regions||0);i++){const l=document.createElement("label"),c=document.createElement("input");c.type="checkbox";c.value=i;c.checked=true;l.append(c,"Область "+(i+1));$("solid-regions").append(l);}drawRegions();}
 function openSolid(kind){closeSolid();$("edit").hidden=true;solidKind=kind;$("solid-icon").src="icons/"+kind+".png";const profile=kind==="extrude"||kind==="revolve";$("solid-title").textContent={extrude:"Выдавливание",revolve:"Вращение",fillet:"Скругление",chamfer:"Фаска"}[kind];
  $("solid-sketch-label").hidden=!profile;$("solid-regions").hidden=!profile;$("solid-op-label").hidden=!profile;$("solid-axis-label").hidden=kind!=="revolve";$("solid-flip-label").hidden=!profile;
  $("solid-value-label").textContent=kind==="revolve"?"Угол, °":kind==="fillet"?"Радиус, мм":kind==="chamfer"?"Размер фаски, мм":"Глубина, мм";$("solid-value").value=kind==="revolve"?360:profile?10:1;$("solid-flip").checked=false;
- if(profile){$("solid-sketch").replaceChildren(...current.features.filter(f=>f.regions>0).map(f=>new Option(f.name,f.id)));if(selectedFeature()?.regions)$("solid-sketch").value=selected;fillRegions();$("solid-op").value=current.meshes.length?"add":"new";$("solid-hint").textContent="";}else{$("edge-mode").checked=true;updateSelection();}
- $("solid-dialog").hidden=false;previewFitted=false;schedulePreview();}
+ if(profile){$("solid-sketch").replaceChildren(...current.features.filter(f=>f.regions>0).map(f=>new Option(f.name,f.id)));if(selectedFeature()?.regions)$("solid-sketch").value=selected;else $("solid-sketch").selectedIndex=$("solid-sketch").options.length-1;fillRegions();$("solid-op").value=current.meshes.length?"add":"new";$("solid-hint").textContent="";}else{$("edge-mode").checked=true;updateSelection();}
+ $("solid-dialog").hidden=false;drawRegions();previewFitted=false;schedulePreview();}
 function solidArgs(){return {kind:solidKind,value:Number($("solid-value").value),sketch:$("solid-sketch").value,regions:[...$("solid-regions").querySelectorAll("input:checked")].map(x=>Number(x.value)),operation:$("solid-op").value,axis:$("solid-axis").value,flip:$("solid-flip").checked,edges:edgePicks.map(p=>({...p}))};}
 function clearPreview(){clearTimeout(previewTimer);previewVersion++;previewQueued=false;dispose(previewGroup);group.visible=true;delete document.body.dataset.previewVolume;$("preview-error").hidden=true;invalidate();}
-function closeSolid(){clearPreview();solidKind=null;$("solid-dialog").hidden=true;}
+function closeSolid(){clearPreview();solidKind=null;$("solid-dialog").hidden=true;drawRegions();}
 function schedulePreview(){if(!solidKind||$("solid-dialog").hidden||busy)return;clearTimeout(previewTimer);previewVersion++;previewQueued=true;previewTimer=setTimeout(renderPreview,120);}
 async function renderPreview(){
  if(previewInFlight||!previewQueued||!solidKind||busy)return;
@@ -124,7 +149,7 @@ async function renderPreview(){
 }
 $("solid-sketch").onchange=()=>{fillRegions();schedulePreview();};
 $("solid-dialog").addEventListener("input",schedulePreview);
-$("solid-dialog").addEventListener("change",schedulePreview);
+$("solid-dialog").addEventListener("change",()=>{drawRegions();schedulePreview();});
 $("solid-cancel").onclick=closeSolid;
 $("solid-dialog").onsubmit=async e=>{e.preventDefault();const args=solidArgs();clearPreview();const r=await run("solid",args,true);if(r)closeSolid();else schedulePreview();};
 $("new").onclick=()=>run("new",{},true);$("demo").onclick=()=>run("demo",{},true);$("open").onclick=()=>$("file").click();

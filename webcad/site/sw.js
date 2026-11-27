@@ -1,4 +1,4 @@
-const VERSION="freeshape-web-0.3.3";
+const VERSION="freeshape-web-0.3.4";
 self.addEventListener("install",event=>event.waitUntil((async()=>{
  const response=await fetch("./offline-files.json",{cache:"no-store"});
  if(!response.ok)throw Error("Offline manifest unavailable");

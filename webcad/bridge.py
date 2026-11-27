@@ -49,6 +49,17 @@ def state_meshes(state, hidden=()):
     return meshes
 
 
+def region_mesh(face, plane=None):
+    m = K.tessellate(face)
+    vertices = [list(plane.to_local(v)) for v in m.verts] if plane is not None else m.verts.tolist()
+    return {"vertices": vertices, "triangles": m.tris.tolist(),
+            "edges": [e.ravel().tolist() for e in m.edge_polys] if plane is None else []}
+
+
+def sketch_regions_view(result):
+    return [region_mesh(face) for face in result.regions]
+
+
 def summary(d):
     meshes = state_meshes(d.state, d.hidden_parts)
     return {"name": d.name, "units": d.units, "parts": [{"id": p.id, "name": p.name} for p in d.state.parts.values()], "undo": d.can_undo(), "redo": d.can_redo(), "features": [{"id": f["id"], "name": f.get("name", f["type"]),
@@ -57,6 +68,7 @@ def summary(d):
             "regions": len(d.state.sketches[f["id"]].regions) if f["id"] in d.state.sketches else 0,
             "suppressed": f.get("suppressed", False)} for f in d.features],
             "errors": d.errors, "meshes": meshes,
+            "sketch_regions": {fid: sketch_regions_view(sr) for fid, sr in d.state.sketches.items()},
             "volume": sum(float(K.volume(p.shape)) for p in d.state.parts.values())}
 
 
@@ -105,7 +117,9 @@ def subref(pick, kind):
 
 def sketch_view():
     s = draft["sketch"]
-    return {"draft": s.to_dict(), "plane": draft["plane"], "id": draft["id"],
+    plane = K.std_plane("Top")
+    regions = [region_mesh(face, plane) for face in K.sketch_regions(plane, s.curves())]
+    return {"regions": regions, "draft": s.to_dict(), "plane": draft["plane"], "id": draft["id"],
             "dof": s.status.get("dof"), "bad": list(s.status.get("bad", [])),
             "curves": {eid: [q.tolist() for q in s.polylines(eid, 80)]
                        for eid in s.entities if s.entities[eid]["type"] not in ("image", "text")},
