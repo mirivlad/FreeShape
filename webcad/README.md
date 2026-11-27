@@ -7,6 +7,13 @@ exists. Dependencies are vendored during image build.
 
 ## Deploy
 
+For a local Git checkout on the `experiment/browser-wasm` branch, run from the repository root:
+
+    ./update-web.sh
+
+The script pulls from `origin` (fast-forward only), builds `freeshape-web:local`, replaces the local standalone container, checks `/healthz`, and prints the browser URL. It refuses to modify a Compose/Portainer-managed container and preserves the old container if the new one fails to start. Requires Bash, Git and access to a local Docker daemon. Defaults: `WEB_PORT=8086`, `WEB_CONTAINER=freeshape-web`, `WEB_IMAGE=freeshape-web:local`. Optionally set `WEB_URL` to print your reverse-proxy URL. Example: `WEB_PORT=8090 ./update-web.sh`. Existing local edits must be committed or stashed first.
+
+
 Portainer Web editor: paste webcad/compose.yaml after the CI image is published.
 The container listens at 8080, mapped to host 8086. The GHCR package may need
 public visibility or registry authentication. To build without GHCR:

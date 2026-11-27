@@ -17,6 +17,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      - name: Check local update script syntax
+        run: bash -n update-web.sh
       - name: Build local static image
         run: docker build -f webcad/Dockerfile -t freeshape-web:test .
       - name: Start static server
