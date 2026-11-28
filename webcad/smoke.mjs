@@ -539,6 +539,43 @@ try {
  await page.waitForFunction(()=>Number(document.body.dataset.previewVolume)>11000&&Number(document.body.dataset.previewVolume)<12000);
  await page.locator("#solid-cancel").click();await volume(12000);
  console.log("PASS fillet diagnostics and recovery");
+ // 0.4.0: native corner operations, offset, slot and pick-first copy tools.
+ async function freshSketch(){await menuCommand("new");await volume(0);await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});}
+ async function opField(key,value){await page.locator("#sk-op-"+key).fill(String(value));}
+ async function opPreview(n){await page.waitForFunction(n=>Number(document.querySelector("#sketch-canvas").dataset.opEntities)===n&&!document.querySelector("#sk-op-apply").disabled,n);}
+ async function acceptOp(n){await opPreview(n);await page.locator("#sk-op-apply").click();await objects(n);}
+ async function finishNative(){await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});await noError();return JSON.parse((await save()).toString()).features[0].params.sketch;}
+ await freshSketch();
+ await page.locator('[data-tool="rect"]').click();await conAt(-30,-15,true);await conAt(-10,5,true);await objects(4);
+ await page.locator('[data-tool="sk_fillet"]').click();await conAt(-30,-15);
+ await page.locator("#sk-op-value").waitFor();await opField("value",2);await opPreview(6);
+ await opField("value",100);await page.waitForFunction(()=>document.querySelector("#sk-op-error").textContent.length>0);
+ await opField("value",2);await opPreview(6);await page.locator("#sk-op-cancel").click();await objects(4);
+ await conAt(-30,-15);await opField("value",2);await acceptOp(6);
+ await page.locator("#sk-undo").click();await objects(4);await page.locator("#sk-redo").click();await objects(6);
+ await page.locator('[data-tool="sk_chamfer"]').click();await conAt(-10,5);await opField("value",2);await acceptOp(10);
+ const corners=await finishNative();assert(corners.constraints.some(c=>c.type==="radius"&&Math.abs(c.value-2)<1e-6));assert.equal(Object.values(corners.entities).filter(e=>e.virtual).length,2);
+ console.log("PASS corner fillet/chamfer live native preview, invalid radius, cancel and undo");
+ await freshSketch();
+ await page.locator('[data-tool="circle"]').click();await conAt(-20,0,true);await conAt(-15,0,true);await objects(1);
+ await page.locator('[data-tool="offset"]').click();await conAt(-15,0);await opField("value",-2);await acceptOp(2);
+ await page.locator('[data-tool="slot"]').click();await conAt(5,-15,true);await conAt(25,-15,true);await opField("value",4);await acceptOp(7);
+ const slots=await finishNative();assert.equal(Object.values(slots.entities).filter(e=>e.type==="arc").length,2);assert(slots.constraints.some(c=>c.type==="radius"&&Math.abs(c.value-2)<1e-6));
+ console.log("PASS inward offset and straight slot");
+ for(const tool of ["sk_mirror","sk_lpattern","sk_cpattern","sk_transform","sk_copy"]){
+  await freshSketch();
+  await page.locator('[data-tool="circle"]').click();await conAt(-20,0,true);await conAt(-15,0,true);await objects(1);
+  await page.locator('[data-tool="line"]').click();await page.locator("#construction").check();await conAt(0,-20,true);await conAt(0,20,true);await objects(2);await page.locator("#construction").uncheck();
+  await page.locator('[data-tool="select"]').click();await conAt(-15,0);await page.locator('[data-tool="'+tool+'"]').click();
+  if(tool==="sk_mirror"){await conAt(0,10);await objects(3);}
+  else if(tool==="sk_lpattern"){await conAt(0,10);await opField("count",3);await opField("spacing",12);await acceptOp(4);}
+  else if(tool==="sk_cpattern"){await conAt(0,0);await opField("count",4);await opField("angle",360);await acceptOp(5);}
+  else {await conAt(0,0);await opField("dx",10);await opField("dy",5);await opField("angle",90);await acceptOp(tool==="sk_transform"?2:3);}
+  const native=await finishNative();const circles=Object.values(native.entities).filter(e=>e.type==="circle");
+  assert.equal(circles.length,{sk_mirror:2,sk_lpattern:3,sk_cpattern:4,sk_transform:1,sk_copy:2}[tool]);
+  assert(circles.every(e=>Math.abs(e.r-5)<.01));
+  console.log("PASS "+tool+" native file");
+ }
  await menuCommand("offline");
  await page.waitForFunction(()=>document.body.dataset.offline==="ready"||document.querySelector("#errors").textContent.trim(),{},{timeout:240000});await noError();
  await context.setOffline(true);await page.reload();await ready();await volume(0);

@@ -12,3 +12,10 @@
 #solid-manipulators .manip-hit:active{cursor:grabbing}
 #solid-new-variable{width:100%;color:#176a37;font-weight:600}
 #solid-dialog input[inputmode=decimal]{width:100%;min-width:0}
+
+.sk-op-prompt{position:absolute;z-index:8;width:238px;max-width:calc(100% - 12px);padding:9px;background:#fff;color:#243242;border:1px solid #9aafc6;border-radius:5px;box-shadow:0 3px 10px #0004;font-size:12px}
+.sk-op-prompt label{display:block;margin-top:6px}.sk-op-prompt input{display:block;width:100%;padding:5px;margin:3px 0;box-sizing:border-box;border:1px solid #aab5c3;border-radius:3px}
+#sk-op-error{color:#a71b2c;font-size:11px;overflow-wrap:anywhere}#sk-op-prompt .offer-actions{margin-top:7px;display:flex;gap:4px}
+#sk-op-prompt[hidden]{display:none}
+
+#dimension-overlay.operation-preview *{pointer-events:none!important}

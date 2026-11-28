@@ -8,6 +8,9 @@ const add=(a,b,t=1)=>[a[0]+b[0]*t,a[1]+b[1]*t];
 const tau=2*Math.PI;
 const constraintHints={coincident:"Совпадение: две точки, точка и кривая или две окружности/дуги",point_on:"Точка на кривой: точка и кривая",horizontal:"Горизонтальность: отрезок или две точки",vertical:"Вертикальность: отрезок или две точки",parallel:"Параллельность: два отрезка",perpendicular:"Перпендикулярность: два отрезка или отрезок и кривая",normal:"Нормаль: отрезок и окружность, дуга или эллипс",tangent:"Касательность: отрезок и круговая кривая или две круговые кривые",equal:"Равенство: два отрезка или две круговые кривые",midpoint:"Середина: точка и отрезок или дуга",concentric:"Концентричность: две круговые кривые или кривая и точка",fix:"Фиксация: точка или объект",symmetric:"Симметрия: две точки, два отрезка или две круговые кривые, затем ось"};
 const constraintGlyphs={coincident:"●",point_on:"●",horizontal:"H",vertical:"V",parallel:"∥",perpendicular:"⊥",tangent:"◡",normal:"⊾",symmetric:"⋈",equal:"=",midpoint:"M",concentric:"◎",fix:"⚓"};
+const editTools=new Set(["sk_fillet","sk_chamfer","offset","slot","sk_mirror","sk_lpattern","sk_cpattern","sk_transform","sk_copy"]);
+const pickFirstTools=new Set(["sk_mirror","sk_lpattern","sk_cpattern","sk_transform","sk_copy"]);
+const editHints={sk_fillet:"Выберите угол из двух отрезков, затем радиус",sk_chamfer:"Выберите угол из двух отрезков, затем расстояние",offset:"Выберите отрезок, дугу или окружность; отрицательное смещение — в другую сторону",slot:"Две точки центров → ширина паза",sk_mirror:"Выберите геометрию, затем ось отражения",sk_lpattern:"Выберите геометрию, затем линию направления массива",sk_cpattern:"Выберите геометрию, затем центр массива",sk_transform:"Выберите геометрию, затем центр поворота",sk_copy:"Выберите геометрию, затем центр копирования"};
 const wrap=a=>(a%tau+tau)%tau;
 function intersect(a,b){
  if(a.kind==="line"&&b.kind==="line"){
@@ -43,7 +46,7 @@ function segmentInBox(a,b,r){
 export class SketchEditor {
  constructor(send,finish,status,preview){
   this.send=send;this.preview=preview;this.offers=[];this.splineVersion=0;this.splineTimer=0;this.splineInFlight=false;this.splinePath=null;this.finish=finish;this.status=status;this.canvas=$("sketch-canvas");this.ctx=this.canvas.getContext("2d");
-  this.active=false;this.busy=false;this.tool="select";this.constraintTool=null;this.snapSources=[];this.wakeEntities=[];this.anchors=[];this.selection=new Set();this.scale=8;this.center=[0,0];this.mouse=null;this.pan=null;this.drag=null;this.boxDrag=null;this.dragView=null;this.dragFlight=false;this.dragQueued=false;this.dimensionMode=false;this.state=null;this.dimEditing=null;
+  this.opSession=null;this.opView=null;this.opTimer=0;this.opFlight=false;this.opQueued=false;this.active=false;this.busy=false;this.tool="select";this.constraintTool=null;this.snapSources=[];this.wakeEntities=[];this.anchors=[];this.selection=new Set();this.scale=8;this.center=[0,0];this.mouse=null;this.pan=null;this.drag=null;this.boxDrag=null;this.dragView=null;this.dragFlight=false;this.dragQueued=false;this.dimensionMode=false;this.state=null;this.dimEditing=null;
   this.canvas.addEventListener("contextmenu",e=>e.preventDefault());
   this.canvas.addEventListener("pointerdown",e=>this.down(e));
   this.canvas.addEventListener("pointermove",e=>this.move(e));
@@ -60,6 +63,8 @@ export class SketchEditor {
   $("sk-offer-apply").onclick=()=>this.applyOffer();
   $("sk-offer-skip").onclick=()=>this.clearOffers();
   $("sk-offer-value").addEventListener("keydown",e=>{if(e.key==="Enter"||e.key==="Escape"){e.preventDefault();e.stopPropagation();if(e.key==="Enter")this.applyOffer();else {this.clearOffers();this.canvas.focus();}}});
+  $("sk-op-prompt").onsubmit=e=>{e.preventDefault();this.applyOperation();};
+  $("sk-op-cancel").onclick=()=>this.cancelOperation();
   $("sk-delete").onclick=()=>this.remove();
   $("sk-undo").onclick=()=>this.change("sketch_undo");
   $("sk-redo").onclick=()=>this.change("sketch_redo");
@@ -68,7 +73,7 @@ export class SketchEditor {
   $("sk-cancel").onclick=()=>this.end("sketch_cancel");
   window.addEventListener("keydown",e=>{
    if(!this.active||e.target.matches("input,textarea,select"))return;
-   const keys={KeyL:"line",KeyR:"rect",KeyC:"circle",KeyA:"arc",KeyP:"point",KeyE:"ellipse",KeyS:"spline",KeyM:"trim",KeyX:"extend",KeyD:"dimension",Escape:"select"};
+   const keys={KeyL:"line",KeyR:"rect",KeyC:"circle",KeyA:"arc",KeyP:"point",KeyE:"ellipse",KeyS:"spline",KeyM:"trim",KeyX:"extend",KeyD:"dimension",KeyO:"offset",KeyF:"sk_fillet",Escape:"select"};
    if(e.code==="Enter"&&this.tool==="spline"){e.preventDefault();this.finishSpline();}
    else if(e.ctrlKey&&e.code==="KeyZ"){e.preventDefault();this.change(e.shiftKey?"sketch_redo":"sketch_undo");}
    else if(e.ctrlKey&&e.code==="KeyY"){e.preventDefault();this.change("sketch_redo");}
@@ -79,18 +84,93 @@ export class SketchEditor {
  show(s){this.active=true;this.state=s;this.anchors=[];this.selection.clear();this.mouse=null;this.center=[0,0];this.scale=8;
   $("dimension-overlay").hidden=false;$("sketch-canvas").hidden=false;$("sketch-tools").hidden=false;$("sketch-panel").hidden=false;$("model-panel").hidden=true;$("view-controls").hidden=true;
   $("sk-title").textContent=s.id?"Эскиз "+s.id:"Новый эскиз";$("sk-plane").textContent=s.plane.kind==="std"?s.plane.name:s.plane.kind==="face"?"Грань":"Плоскость";$("sk-show-regions").checked=true;$("sk-show-constraints").checked=true;$("sk-constraints").hidden=false;this.setTool("select");this.resize();this.fit();this.updateInfo();}
- hide(){this.closeVariableCompletion();this.active=false;this.drag=null;this.boxDrag=null;this.dragView=null;this.clearOffers();this.clearSplinePreview();this.dimEditing=null;$("dimension-overlay").replaceChildren();$("dimension-overlay").hidden=true;this.state=null;this.anchors=[];this.selection.clear();$("sketch-canvas").hidden=true;$("sketch-tools").hidden=true;$("sketch-panel").hidden=true;$("model-panel").hidden=false;$("view-controls").hidden=false;}
+ hide(){this.cancelOperation(false);this.closeVariableCompletion();this.active=false;this.drag=null;this.boxDrag=null;this.dragView=null;this.clearOffers();this.clearSplinePreview();this.dimEditing=null;$("dimension-overlay").replaceChildren();$("dimension-overlay").hidden=true;this.state=null;this.anchors=[];this.selection.clear();$("sketch-canvas").hidden=true;$("sketch-tools").hidden=true;$("sketch-panel").hidden=true;$("model-panel").hidden=false;$("view-controls").hidden=false;}
  resize(){const r=this.canvas.getBoundingClientRect();this.w=Math.max(1,r.width);this.h=Math.max(1,r.height);const d=Math.min(devicePixelRatio,2);this.canvas.width=Math.round(this.w*d);this.canvas.height=Math.round(this.h*d);this.ctx.setTransform(d,0,0,d,0,0);this.draw();}
  screen(q){return [this.w/2+(q[0]-this.center[0])*this.scale,this.h/2-(q[1]-this.center[1])*this.scale];}
  uv(p){return [this.center[0]+(p[0]-this.w/2)/this.scale,this.center[1]-(p[1]-this.h/2)/this.scale];}
  eventPos(e){const r=this.canvas.getBoundingClientRect();return [e.clientX-r.left,e.clientY-r.top];}
  fit(){const pts=[...Object.values(this.state?.draft.points||{}),...Object.values(this.state?.curves||{}).flat(2),...(this.state?.model_edges||[]).flatMap(m=>m.path)];if(pts.length>1){const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]),a=Math.min(...xs),b=Math.max(...xs),c=Math.min(...ys),d=Math.max(...ys);this.center=[(a+b)/2,(c+d)/2];this.scale=Math.min(this.w/Math.max(b-a,10),this.h/Math.max(d-c,10))*.72;}else {this.center=[0,0];this.scale=Math.min(this.w,this.h)/100;}this.draw();}
- setTool(t){if(this.busy)return;this.closeVariableCompletion();this.dimensionMode=t==="dimension";this.drag=null;this.boxDrag=null;this.dragView=null;this.snapSources=[];this.wakeEntities=[];this.setConstraintTool(null);this.clearOffers();this.clearSplinePreview();this.tool=t;this.anchors=[];if(t==="dimension")this.selection.clear();this.mouse=null;this.toolOptions();for(const b of document.querySelectorAll("[data-tool]"))b.classList.toggle("active",b.dataset.tool===t);this.draw();}
+ setTool(t){if(this.busy)return;this.cancelOperation(false);this.closeVariableCompletion();this.dimensionMode=t==="dimension";this.drag=null;this.boxDrag=null;this.dragView=null;this.snapSources=[];this.wakeEntities=[];this.setConstraintTool(null);this.clearOffers();this.clearSplinePreview();this.tool=t;this.anchors=[];if(t==="dimension"||editTools.has(t)&&!pickFirstTools.has(t))this.selection.clear();this.mouse=null;this.toolOptions();for(const b of document.querySelectorAll("[data-tool]"))b.classList.toggle("active",b.dataset.tool===t);this.draw();}
  toolOptions(){
   const polygon=["polygon","polygon_out"].includes(this.tool),spline=this.tool==="spline",ellipse=this.tool==="ellipse";
   const modify=this.modifying();
-  $("sk-tool-options").hidden=!(polygon||spline||ellipse||modify||["line","arc","rect","center_rect","circle","dimension"].includes(this.tool));$("sk-polygon-options").hidden=!polygon;$("sk-spline-options").hidden=!spline;
-  $("sk-tool-help").textContent=ellipse?"Центр → конец оси → вторая полуось":spline?"Щёлкайте точки; Enter или двойной щелчок — завершить, первая точка — замкнуть, Esc — отменить":polygon?(this.tool==="polygon"?"Центр → вершина":"Центр → середина стороны"):({dimension:"Выберите один или два объекта, затем щёлкните место размера",line:"Цепочка отрезков; Esc — закончить",arc:"Начало → конец → точка на дуге",rect:"Два противоположных угла",center_rect:"Центр → угол",circle:"Центр → радиус",trim:"Щёлкните удаляемый участок отрезка между пересечениями",split:"Щёлкните точку разделения отрезка или дуги",extend:"Щёлкните ближе к концу, который нужно удлинить до следующей кривой"}[this.tool]||"");
+  $("sk-tool-options").hidden=!(polygon||spline||ellipse||modify||editTools.has(this.tool)||["line","arc","rect","center_rect","circle","dimension"].includes(this.tool));$("sk-polygon-options").hidden=!polygon;$("sk-spline-options").hidden=!spline;
+  $("sk-tool-help").textContent=ellipse?"Центр → конец оси → вторая полуось":spline?"Щёлкайте точки; Enter или двойной щелчок — завершить, первая точка — замкнуть, Esc — отменить":polygon?(this.tool==="polygon"?"Центр → вершина":"Центр → середина стороны"):({dimension:"Выберите один или два объекта, затем щёлкните место размера",line:"Цепочка отрезков; Esc — закончить",arc:"Начало → конец → точка на дуге",rect:"Два противоположных угла",center_rect:"Центр → угол",circle:"Центр → радиус",trim:"Щёлкните удаляемый участок отрезка между пересечениями",split:"Щёлкните точку разделения отрезка или дуги",extend:"Щёлкните ближе к концу, который нужно удлинить до следующей кривой"}[this.tool]||editHints[this.tool]||"");
+ }
+ nice(px=30){const raw=px/this.scale,mag=10**Math.floor(Math.log10(Math.max(raw,1e-9)));return ([1,2,5,10].find(n=>n*mag>=raw)||10)*mag;}
+ opLength(v){const factor=({mm:1,cm:10,m:1000,in:25.4,ft:304.8})[this.state.units]||1;return Number((v/factor).toFixed(8));}
+ opClick(q,e){
+  const tool=this.tool,{entities,points}=this.state.draft,pid=this.pickPoint(q),eid=this.pick(q,x=>!x.helper),ids=[...this.selection].filter(id=>entities[id]);
+  const length=(key,label,v)=>({key,label:label+" ("+(this.state.units||"mm")+")",value:this.opLength(v),kind:"length"});
+  const field=(key,label,value,kind="number")=>({key,label,value,kind});
+  if(tool==="sk_fillet"||tool==="sk_chamfer"){
+   if(!pid)return;
+   const ls=Object.values(entities).filter(x=>x.type==="line"&&(x.p1===pid||x.p2===pid));
+   const short=Math.min(...ls.map(x=>distance(points[x.p1],points[x.p2])),ls.length?Infinity:10);
+   this.startOperation({tool,id:pid},points[pid],[length("value",tool==="sk_fillet"?"Радиус скругления":"Расстояние фаски",Math.min(this.nice(),short*.3))]);return;
+  }
+  if(tool==="offset"){
+   if(eid)this.startOperation({tool,id:eid},q,[length("value","Смещение (±)",this.nice())]);return;
+  }
+  if(tool==="slot"){
+   const h=this.snap(q,e.shiftKey),p={uv:h.uv,ref:h.ref,alignments:h.alignments,relation:h.relation,free:e.shiftKey||!$("sk-snap-enabled").checked};
+   if(!this.anchors.length){this.anchors=[p];this.draw();return;}
+   const a=this.anchors[0];if(distance(a.uv,p.uv)<1e-8)return;
+   this.anchors=[];this.startOperation({tool,points:[a,p],construction:$("construction").checked},add(a.uv,sub(p.uv,a.uv),.5),[length("value","Ширина паза",Math.max(distance(a.uv,p.uv)/3,.001))]);return;
+  }
+  if((tool==="sk_mirror"||tool==="sk_lpattern")&&ids.length&&eid&&!ids.includes(eid)&&entities[eid].type==="line"&&!pid){
+   if(tool==="sk_mirror"){this.change("sketch_operation",{tool,ids,axis:eid}).then(ok=>{if(ok)this.setTool("select");});return;}
+   const a=points[entities[eid].p1],b=points[entities[eid].p2],d=sub(b,a),L=Math.hypot(...d),u=d.map(x=>x/Math.max(L,1e-12)),ps=ids.flatMap(id=>(this.state.curves[id]||[]).flat()).map(p=>dot(p,u)),extent=ps.length?Math.max(...ps)-Math.min(...ps):0;
+   this.startOperation({tool,ids,axis:eid,at:q},b,[field("count","Число экземпляров",3),length("spacing","Шаг (±)",Math.max(extent*1.25,this.nice(40)))]);return;
+  }
+  if(ids.length&&((tool==="sk_cpattern"&&(pid||!eid||!ids.includes(eid)))||(["sk_transform","sk_copy"].includes(tool)&&(pid||!eid)))){
+   const centre=pid?points[pid]:q;
+   const fs=tool==="sk_cpattern"?[field("count","Число экземпляров",6),field("angle","Полный угол, °",360,"angle")]:[length("dx","Смещение X",0),length("dy","Смещение Y",0),field("angle","Угол поворота, °",0,"angle")];
+   this.startOperation({tool,ids,centre},centre,fs);return;
+  }
+  if(eid){if(this.selection.has(eid))this.selection.delete(eid);else this.selection.add(eid);this.updateInfo();this.draw();}
+ }
+ startOperation(args,anchor,fields){
+  this.cancelOperation(false);this.opSession={args,anchor,fields,version:0,valid:false,index:0};this.opView=null;this.mouse=null;
+  const form=$("sk-op-prompt"),container=$("sk-op-fields");container.replaceChildren();
+  $("sk-op-title").textContent=editHints[args.tool];$("sk-op-error").textContent="";
+  for(const f of fields){
+   const label=document.createElement("label"),input=document.createElement("input");label.textContent=f.label;input.type="text";input.value=String(f.value);input.dataset.opField=f.key;input.id="sk-op-"+f.key;
+   input.inputMode="decimal";label.append(input);container.append(label);
+   this.attachVariableCompletion(input);
+   input.addEventListener("input",()=>this.queueOperation());
+   input.addEventListener("keydown",e=>{if(e.key==="Escape"){e.preventDefault();e.stopPropagation();this.cancelOperation();}else if(e.key==="Enter"){e.preventDefault();e.stopPropagation();const inputs=[...container.querySelectorAll("input")],i=inputs.indexOf(input);if(i<inputs.length-1){inputs[i+1].focus();inputs[i+1].select();}else this.applyOperation();}});
+  }
+  form.hidden=false;$("dimension-overlay").classList.add("operation-preview");this.positionOperation();const first=container.querySelector("input");first.focus();first.select();this.queueOperation();
+ }
+ positionOperation(){
+  if(!this.opSession)return;const form=$("sk-op-prompt"),p=this.screen(this.opSession.anchor);
+  form.style.left=Math.max(6,Math.min(this.w-form.offsetWidth-6,p[0]+45))+"px";
+  form.style.top=Math.max(6,Math.min(this.h-form.offsetHeight-6,p[1]-26))+"px";
+ }
+ operationArgs(){
+  const s=this.opSession,args={...s.args};for(const f of s.fields)args[f.key]=$("sk-op-"+f.key).value.trim();return args;
+ }
+ queueOperation(){
+  if(!this.opSession)return;this.opSession.version++;this.opSession.valid=false;this.opSession.acceptWhenReady=false;this.opQueued=true;
+  $("sk-op-apply").disabled=true;clearTimeout(this.opTimer);this.opTimer=setTimeout(()=>this.previewOperation(),100);
+ }
+ async previewOperation(){
+  if(this.opFlight||!this.opSession||!this.opQueued)return;const s=this.opSession,version=s.version,args=this.operationArgs();this.opQueued=false;this.opFlight=true;
+  try{
+   const r=await this.preview("sketch_operation_preview",args);
+   if(this.opSession===s&&version===s.version){this.opView=r;s.valid=true;$("sk-op-error").textContent="";$("sk-op-apply").disabled=false;this.canvas.dataset.opPreview=String(Number(this.canvas.dataset.opPreview||0)+1);this.canvas.dataset.opEntities=String(Object.keys(r.draft.entities).length);this.draw();if(s.acceptWhenReady)this.applyOperation();}
+  }catch(e){if(this.opSession===s&&version===s.version){this.opView=null;s.valid=false;$("sk-op-error").textContent=String(e);$("sk-op-apply").disabled=true;this.draw();}}
+  finally{this.opFlight=false;if(this.opSession&&this.opQueued)this.previewOperation();}
+ }
+ async applyOperation(){
+  const s=this.opSession;if(!s||this.busy)return;if(!s.valid){if(this.opFlight||this.opQueued)s.acceptWhenReady=true;return;}
+  const args=this.operationArgs();this.cancelOperation(false);const ok=await this.change("sketch_operation",args);
+  if(ok&&pickFirstTools.has(args.tool))this.setTool("select");this.canvas.focus();
+ }
+ cancelOperation(redraw=true){
+  clearTimeout(this.opTimer);this.opSession=null;this.opView=null;this.opQueued=false;this.closeVariableCompletion();$("sk-op-prompt").hidden=true;$("dimension-overlay").classList.remove("operation-preview");delete this.canvas.dataset.opEntities;
+  if(redraw){this.canvas.focus();this.draw();}
  }
  modifying(){return ["trim","split","extend"].includes(this.tool);}
  modTarget(q){return this.pick(q,e=>!e.helper&&(e.type==="line"||(this.tool!=="trim"&&e.type==="arc")));}
@@ -223,7 +303,7 @@ export class SketchEditor {
  pickPoint(q){let best=null;for(const [id,p] of Object.entries(this.state.draft.points)){const d=distance(q,p);if(d<7/this.scale&&(!best||d<best.d))best={id,d};}return best?.id;}
  pick(q,filter=()=>true){let best=null;for(const [id,paths] of Object.entries(this.state.curves)){if(!filter(this.state.draft.entities[id]))continue;for(const path of paths)for(let i=1;i<path.length;i++){const a=path[i-1],b=path[i],d=sub(b,a),p=add(a,d,Math.max(0,Math.min(1,dot(sub(q,a),d)/Math.max(dot(d,d),1e-20)))),dist=distance(p,q);if(dist<7/this.scale&&(!best||dist<best.dist))best={id,dist};}}
   for(const [id,e] of Object.entries(this.state.draft.entities))if(e.type==="point"&&filter(e)){const dist=distance(q,this.state.draft.points[e.p]);if(dist<7/this.scale&&(!best||dist<best.dist))best={id,dist};}return best?.id;}
- down(e){if(!this.active)return;const p=this.eventPos(e);if(e.button===1||e.button===2){this.pan={p,center:[...this.center]};this.canvas.setPointerCapture(e.pointerId);e.preventDefault();return;}if(e.button!==0||this.busy)return;this.clearOffers();const q=this.uv(p);
+ down(e){if(!this.active)return;const p=this.eventPos(e);if(e.button===1||e.button===2){this.pan={p,center:[...this.center]};this.canvas.setPointerCapture(e.pointerId);e.preventDefault();return;}if(e.button!==0||this.busy||this.opSession)return;this.clearOffers();const q=this.uv(p);
   if(this.constraintTool){const id=this.pickPoint(q)||this.pick(q);if(id){if(this.selection.has(id))this.selection.delete(id);else this.selection.add(id);this.updateInfo();this.draw();if(this.constraintReady(this.constraintTool,[...this.selection]))this.applyConstraint(this.constraintTool);}return;}
   if(this.dimensionMode){
    const id=this.pickPoint(q)||this.pick(q);
@@ -238,6 +318,7 @@ export class SketchEditor {
     if(id!=="origin"&&!additive){this.drag={id,start:p,startUV:q,uv:pid?this.state.draft.points[pid]:q,moved:false};this.canvas.setPointerCapture(e.pointerId);}}
    this.updateInfo();this.draw();return;
   }
+  if(editTools.has(this.tool)){this.opClick(q,e);return;}
   if(this.modifying()){const id=this.modTarget(q);if(id)this.change("sketch_modify",{tool:this.tool,id,uv:q});return;}
   const sides=this.polygonSides();if(["polygon","polygon_out"].includes(this.tool)&&sides===null){this.status("Число сторон: от 3 до 64");return;}
    const hit=this.snap(q,e.shiftKey);if(this.tool==="spline"&&this.anchors.length){
@@ -273,7 +354,7 @@ export class SketchEditor {
   if(this.pan){this.center=[this.pan.center[0]-(p[0]-this.pan.p[0])/this.scale,this.pan.center[1]+(p[1]-this.pan.p[1])/this.scale];this.draw();return;}
   if(this.boxDrag){this.boxDrag.end=p;this.draw();return;}
   if(this.drag){const d=this.drag;d.moved ||= distance(p,d.start)>4;d.uv=this.uv(p);if(d.moved){this.dragQueued=true;this.previewDrag();}this.draw();return;}
-  const q=this.uv(p);this.mouse=this.modifying()?{uv:q,ref:{id:this.modTarget(q)}}:this.snap(q,e.shiftKey,true);if(this.tool==="spline")this.scheduleSplinePreview();this.draw();
+  const q=this.uv(p);if(this.opSession)return;if(editTools.has(this.tool)&&this.tool!=="slot"){this.mouse={uv:q,ref:{id:["sk_fillet","sk_chamfer"].includes(this.tool)?this.pickPoint(q):this.pick(q,x=>!x.helper)||this.pickPoint(q)}};this.draw();return;}this.mouse=this.modifying()?{uv:q,ref:{id:this.modTarget(q)}}:this.snap(q,e.shiftKey,true);if(this.tool==="spline")this.scheduleSplinePreview();this.draw();
  }
  up(e){
   this.pan=null;
@@ -295,7 +376,7 @@ export class SketchEditor {
  }
  insertVariable(input,name){
   const token=this.variableToken(input);if(!token)return;
-  input.setRangeText("#"+name,token.start,token.end,"end");this.closeVariableCompletion();input.focus();
+  input.setRangeText("#"+name,token.start,token.end,"end");this.closeVariableCompletion();input.focus();if(input.dataset.opField)this.queueOperation();
  }
  updateVariableCompletion(input){
   this.closeVariableCompletion();if(!this.active||this.busy)return;
@@ -351,7 +432,7 @@ export class SketchEditor {
   args.new_variable={name,expr:value.trim()};
   return true;
  }
- async change(op,args={}){if(!this.active||this.busy)return false;if(!await this.prepareVariable(op,args))return false;if(!this.active||this.busy)return false;this.closeVariableCompletion();if(op!=="sketch_offer_dimension")this.clearOffers();if(op==="sketch_undo"||op==="sketch_redo"){this.snapSources=[];this.wakeEntities=[];this.anchors=[];this.clearSplinePreview();}this.busy=true;this.updateInfo();let ok=false;try{this.state=await this.send(op,args);$("sk-info").dataset.revision=String(Number($("sk-info").dataset.revision||0)+1);this.dimEditing=null;this.selection.clear();this.mouse=null;
+ async change(op,args={}){if(!this.active||this.busy)return false;if(this.opSession)this.cancelOperation(false);if(!await this.prepareVariable(op,args))return false;if(!this.active||this.busy)return false;this.closeVariableCompletion();if(op!=="sketch_offer_dimension")this.clearOffers();if(op==="sketch_undo"||op==="sketch_redo"){this.snapSources=[];this.wakeEntities=[];this.anchors=[];this.clearSplinePreview();}this.busy=true;this.updateInfo();let ok=false;try{this.state=await this.send(op,args);$("sk-info").dataset.revision=String(Number($("sk-info").dataset.revision||0)+1);this.dimEditing=null;this.selection.clear();this.mouse=null;
   if(op==="sketch_draw"&&args.tool==="line"&&this.state.chain_end){const id=this.state.chain_end;this.anchors=[{uv:this.state.draft.points[id],ref:{kind:"point",id}}];}
   if(op==="sketch_offer_dimension"&&this.anchors[0]?.ref?.kind==="point"){const p=this.state.draft.points[this.anchors[0].ref.id];if(p)this.anchors[0].uv=p;}
   if(op==="sketch_draw"&&this.state.offers?.length){this.offers=this.state.offers;this.showOffer();}
@@ -372,7 +453,7 @@ export class SketchEditor {
  }
 
  remove(){if(this.selection.size)this.change("sketch_delete",{ids:[...this.selection]});}
- async end(op){if(this.busy)return;if(op==="sketch_finish"&&this.tool==="spline"&&this.anchors.length){this.status("Завершите сплайн или отмените построение (Esc)");return;}this.busy=true;try{const result=await this.send(op);this.hide();this.finish(result);}catch(e){this.status(String(e));}finally{this.busy=false;this.updateInfo();}}
+ async end(op){if(this.busy)return;if(this.opSession){if(op==="sketch_finish"){this.status("Подтвердите или отмените текущую операцию");return;}this.cancelOperation(false);}if(op==="sketch_finish"&&this.tool==="spline"&&this.anchors.length){this.status("Завершите сплайн или отмените построение (Esc)");return;}this.busy=true;try{const result=await this.send(op);this.hide();this.finish(result);}catch(e){this.status(String(e));}finally{this.busy=false;this.updateInfo();}}
  updateInfo(){if(!this.active)return;const s=this.state;const pending=$("sk-pending-variables");pending.hidden=!(s.pending_variables||[]).length;pending.replaceChildren(...(s.pending_variables||[]).map(v=>{const line=document.createElement("div");line.textContent="#"+v.name+" = "+s.variables[v.name]+(v.mtype==="fixed_angle"?"°":" мм");return line;}));$("sk-info").textContent=Object.keys(s.draft.entities).length+" объектов · степеней свободы: "+(s.dof??"—")+" · выбрано: "+this.selection.size;
   $("sk-constraints").replaceChildren(...s.draft.constraints.map(c=>{const div=document.createElement("div");div.className="constraint-row"+(s.bad.includes(c.id)?" bad":"");const label=document.createElement("span");label.textContent=(constraintGlyphs[c.type]?constraintGlyphs[c.type]+" ":"")+c.type+" · "+c.refs.join(", ");label.title=constraintHints[c.type]||c.type;div.dataset.constraintType=c.type;div.dataset.constraintId=c.id;div.onmouseenter=()=>{this.constraintHover=c.refs;this.draw();};div.onmouseleave=()=>{this.constraintHover=null;this.draw();};div.append(label);if(typeof c.value==="number"&&["distance","hdistance","vdistance","radius","diameter","angle"].includes(c.type)){const input=document.createElement("input");input.type="text";input.value=c.expr||String(c.value);input.title="Изменить размер";input.disabled=this.busy;this.attachVariableCompletion(input);input.onchange=()=>{if(input.checkValidity())this.change("sketch_dimension",{id:c.id,value:input.value});};input.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();input.blur();}});div.append(input);}const del=document.createElement("button");del.textContent="×";del.title="Удалить ограничение";del.disabled=this.busy;del.onclick=()=>this.change("sketch_delete",{ids:[c.id]});div.append(del);return div;}));$("sk-undo").disabled=this.busy||!s.undo;$("sk-redo").disabled=this.busy||!s.redo;$("sk-finish").disabled=this.busy;$("sk-cancel").disabled=this.busy;
  }
@@ -446,7 +527,7 @@ export class SketchEditor {
   input.addEventListener("blur",()=>close(false));
  }
  line(a,b,color,width=1,dash=[]){const c=this.ctx,p=this.screen(a),q=this.screen(b);c.beginPath();c.setLineDash(dash);c.strokeStyle=color;c.lineWidth=width;c.moveTo(...p);c.lineTo(...q);c.stroke();c.setLineDash([]);}
- draw(){if(!this.active||!this.state||!this.w)return;const original=this.state;if(this.dragView&&this.drag)this.state=this.dragView;try{this.drawFrame();}finally{this.state=original;}}
+ draw(){if(!this.active||!this.state||!this.w)return;const original=this.state;if(this.dragView&&this.drag)this.state=this.dragView;else if(this.opView&&this.opSession)this.state=this.opView;try{this.drawFrame();}finally{this.state=original;}if(this.opSession)this.positionOperation();}
  drawFrame(){this.canvas.dataset.snap=this.mouse?.label||"";this.canvas.dataset.transform=JSON.stringify({center:this.center,scale:this.scale,width:this.w,height:this.h});const c=this.ctx;c.fillStyle="#6d7680";c.fillRect(0,0,this.w,this.h);
   const step=Math.pow(10,Math.floor(Math.log10(55/this.scale)));const spacing=step*this.scale<18?step*5:step;const lo=this.uv([0,this.h]),hi=this.uv([this.w,0]);
   for(let x=Math.ceil(lo[0]/spacing)*spacing;x<=hi[0];x+=spacing)this.line([x,lo[1]],[x,hi[1]],"#77818b");

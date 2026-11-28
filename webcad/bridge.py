@@ -141,7 +141,7 @@ def sketch_view():
             "rectangle_centres": [{"uv": q.tolist(), "diagonal": list(ab), "ids": list(ids)}
                                   for q, ab, ids in SS.rectangle_centres(s)],
             "model_edges": draft["model_edges"], "variables": dict(draft["variables"]),
-            "variable_kinds": dict(draft["variable_kinds"]), "pending_variables": copy.deepcopy(draft["pending_variables"])}
+            "variable_kinds": dict(draft["variable_kinds"]), "pending_variables": copy.deepcopy(draft["pending_variables"]),"units":doc.units}
 
 
 def model_snap_geometry(state, plane, hidden=()):
@@ -681,6 +681,87 @@ def stage_variable(req):
     draft["pending_variables"].append(params)
 
 
+# These operations share the native desktop geometry, constraints and solver.
+# Every preview runs against a fresh copy; the accepted operation is one undo step.
+def sketch_operation(s,req):
+    tool=req["tool"]
+    def val(key,default=None,kind="length",minimum=None):
+        raw=req.get(key,default)
+        if isinstance(raw,str):
+            if len(raw)>256:raise ValueError("Expression too long")
+            if kind=="length":raw=with_unit(raw,doc.units,draft["variable_kinds"])
+            why=text_problem(raw,draft["variables"]) or check_units(raw,kind,draft["variable_kinds"])
+            if why:raise ValueError(why)
+        v=parse_number(raw,angle=kind=="angle",variables=draft["variables"])
+        if v is None:raise ValueError("Invalid "+key)
+        return number(v,minimum),raw
+    def uv(key):
+        q=req[key]
+        if len(q)!=2:raise ValueError("Invalid position")
+        return np.array([number(x) for x in q])
+    def expression(c,raw,scale=1):
+        if c is not None and isinstance(raw,str) and has_vars(raw):
+            c["expr"]=raw if scale==1 else f"({raw})*{scale}"
+    if tool in ("sk_fillet","sk_chamfer"):
+        pid=req["id"]
+        if pid not in s.points:raise ValueError("Select a corner")
+        v,raw=val("value",minimum=1e-8)
+        if tool=="sk_fillet":
+            eid=OPS.fillet_corner(s,pid,v)
+            c=next((c for c in reversed(s.constraints) if c["type"]=="radius" and c["refs"]==[eid]),None)
+        else:
+            OPS.chamfer_corner(s,pid,v)
+            c=next((c for c in reversed(s.constraints) if c["type"]=="distance"),None)
+        expression(c,raw)
+    elif tool=="offset":
+        v,_=val("value")
+        OPS.offset(s,req["id"],v)
+    elif tool=="slot":
+        v,raw=val("value",minimum=1e-8)
+        ps=req["points"]
+        if len(ps)!=2:raise ValueError("Select two slot centres")
+        a,b=[point_at(s,x) for x in ps]
+        if a==b:raise ValueError("Slot ends are in the same place")
+        ids=OPS.slot(s,s.P(a),s.P(b),v,bool(req.get("construction")),a,b)
+        c=next((c for c in reversed(s.constraints) if c["type"]=="radius" and c["refs"][0] in ids),None)
+        expression(c,raw,.5)
+    elif tool in ("sk_mirror","sk_lpattern","sk_cpattern","sk_transform","sk_copy"):
+        ids=list(dict.fromkeys(req["ids"]))
+        if not ids or any(i not in s.entities for i in ids):raise ValueError("Select geometry first")
+        if tool=="sk_mirror":
+            OPS.mirror(s,ids,req["axis"])
+        elif tool=="sk_lpattern":
+            axis=s.entities.get(req["axis"],{})
+            if axis.get("type")!="line" or req["axis"] in ids:raise ValueError("Select direction line")
+            d=s.P(axis["p2"])-s.P(axis["p1"])
+            pts=np.vstack([s.polyline(i,16) for i in ids])
+            if d@(uv("at")-pts.mean(axis=0))<0:d=-d
+            count=val("count",3,"number",2)[0]
+            if count>256 or len(ids)*count>4096:raise ValueError("Pattern too large")
+            OPS.linear_pattern(s,ids,d,int(round(count)),val("spacing",10)[0])
+        elif tool=="sk_cpattern":
+            count=val("count",6,"number",2)[0]
+            if count>256 or len(ids)*count>4096:raise ValueError("Pattern too large")
+            OPS.circular_pattern(s,ids,uv("centre"),int(round(count)),val("angle",360,"angle")[0])
+        else:
+            OPS.transform(s,ids,val("dx",0)[0],val("dy",0)[0],val("angle",0,"angle")[0],uv("centre"),copy=tool=="sk_copy")
+    else:raise ValueError("Unsupported sketch operation")
+
+
+def sketch_operation_preview(req):
+    original=draft["sketch"]
+    trial=original.copy()
+    old_bad=set(original.status.get("bad",[]))
+    draft["sketch"]=trial
+    try:
+        sketch_operation(trial,req)
+        if not trial.solve(ignore=old_bad) and set(trial.status.get("bad",[]))-old_bad:
+            raise ValueError("Constraint cannot be solved")
+        return sketch_view()
+    finally:
+        draft["sketch"]=original
+
+
 def sketch_edit(req):
     s = draft["sketch"]
     before = sketch_snapshot()
@@ -814,6 +895,8 @@ def sketch_edit(req):
                     s.add_point_entity(m)
             else:
                 raise ValueError("Unsupported sketch tool")
+        elif op == "sketch_operation":
+            sketch_operation(s,req)
         elif op == "sketch_modify":
             tool, eid = req["tool"], req["id"]
             e = s.entities.get(eid, {})
@@ -1341,7 +1424,7 @@ def call(request):
         transaction(lambda: doc.replace_feature(f))
     elif op == "begin_sketch":
         return begin_sketch(request)
-    elif op in ("sketch_draw","sketch_delete","sketch_constraint","sketch_drag","sketch_dimension","sketch_modify","sketch_offer_dimension","sketch_dimension_pos"):
+    elif op in ("sketch_draw","sketch_delete","sketch_constraint","sketch_drag","sketch_dimension","sketch_modify","sketch_offer_dimension","sketch_dimension_pos","sketch_operation"):
         return sketch_edit(request)
     elif op in ("sketch_undo","sketch_redo"):
         source,target = ("undo","redo") if op=="sketch_undo" else ("redo","undo")
@@ -1352,6 +1435,8 @@ def call(request):
     elif op == "sketch_dimension_probe":
         c=set_dimension(draft["sketch"].copy(),request["kind"],request["refs"],None,request.get("pos"))
         return {"kind":c["type"],"value":c["value"]}
+    elif op == "sketch_operation_preview":
+        return sketch_operation_preview(request)
     elif op == "sketch_drag_preview":
         return drag_preview(request)
     elif op == "sketch_spline_preview":

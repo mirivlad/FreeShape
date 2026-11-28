@@ -218,3 +218,17 @@ unit-aware numeric expressions and inline typed variables; invalid reference
 recovery and oversized-fillet diagnostics. Surface-only geometry contributes
 zero to the solid volume metric. See PARITY_GATE.md for the acceptance gate;
 publication alone does not close the milestone.
+
+## 0.4.0 — sketch editing operations
+
+Native corner fillet and equal-distance chamfer (including virtual sharp and
+native constraints), signed chain/circle offset, two-centre straight slot,
+mirror, linear and circular patterns, move/rotate and copy/rotate are now
+available in the browser. The input card previews every edit against the
+original sketch using the native solver; confirmation makes a single undoable
+transaction. Existing expressions, document units and variable completion work
+in numeric fields; fillet, chamfer and slot retain the native dimension
+expression. Multi-value tools use a single anchored card with Enter to move
+between fields, rather than separate desktop text popups. Esc cancels without
+modifying geometry. Pattern requests have a bounded size (256 instances /
+4096 selected-entity instances) to avoid exhausting the browser.

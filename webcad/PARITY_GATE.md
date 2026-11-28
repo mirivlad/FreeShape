@@ -24,3 +24,16 @@ Scope: the existing extrude, revolve, fillet and chamfer tools, including
 their native dialogs and behavior. Check the desktop schemas in
 `freeshape/ui/dialogs.py` and native runners in `freeshape/features.py`.
 The originally published 0.3.11 is an intermediate build, not proof of parity.
+
+## 0.4.0 acceptance
+
+Scope: sketch editing tools, not the entire CAD feature catalogue. Compare
+`Sketcher._ops_click`, `Sketcher._prompt` and `freeshape/sketch_ops.py`.
+Implemented: fillet, chamfer, offset, slot, mirror, linear/circular pattern,
+transform and copy. Verification: `webcad/test_sketch_operations.py` checks
+native geometry, constraints, preview isolation, invalid input and undo/redo;
+`webcad/smoke.mjs` exercises real clicks, live inputs, cancel and saved native
+features for the nine tools. Known interface difference: one anchored input
+card with explicit confirmation instead of chained desktop popups. Large
+patterns have a browser resource bound. Unverified or missing desktop
+geometry types from prior stages are not made complete by this release.
