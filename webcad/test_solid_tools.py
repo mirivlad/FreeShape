@@ -98,4 +98,72 @@ class SolidTools(unittest.TestCase):
         self.assertEqual(b.doc.features[-1]["id"],f["id"])
         self.assertEqual(b.doc.features[-1]["params"]["distance"],.5)
 
+    def test_auto_operation_and_direction(self):
+        b.call({"op":"demo"})
+        part=next(iter(b.doc.state.parts.values()))
+        top=next(i for i,f in enumerate(K.faces(part.shape)) if abs(K.face_info(f)["c"][2]-10)<1e-6)
+        r=self.preview("extrude",faces=[{"part":part.id,"index":top}],value=5,auto_op=True)
+        self.assertEqual(r["inferred"]["operation"],"add")
+        self.assertEqual(r["inferred"]["scope"],[part.id])
+        sid,_=self.sketch("rect",[(100,100),(120,110)])
+        r=self.preview("extrude",sketch=sid,regions=[0],value=5,operation="add",auto_op=True)
+        self.assertEqual(r["inferred"]["operation"],"new")
+        # A plane below the profile determines the reversed direction.
+        r=self.preview("extrude",faces=[{"part":part.id,"index":top}],end="up_to_face",
+                       target={"kind":"plane","name":"Top"},operation="new",value=5,auto_direction=True)
+        self.assertTrue(r["inferred"]["flip"])
+        self.assertEqual(r["manipulators"][0]["key"],"flip")
+
+    def test_solid_expression_and_staged_variable(self):
+        sid,_=self.sketch("rect",[(10,0),(30,10)])
+        req=dict(sketch=sid,regions=[0],value="#length * 2",new_variables=[{"name":"length","expr":"5 mm","kind":"length"}])
+        r=self.preview("extrude",**req)
+        self.assertAlmostEqual(r["volume"],2000,places=5)
+        self.assertEqual(r["manipulators"][0]["value"],10)
+        self.assertEqual(len(b.doc.features),1)
+        self.op("extrude",**req)
+        self.assertEqual([x["type"] for x in b.doc.features],["sketch","measure_value","extrude"])
+        self.assertEqual(b.doc.features[-1]["params"]["depth"],"#length * 2")
+        b.call({"op":"variable","id":b.doc.features[1]["id"],"name":"length","expr":"8"})
+        self.assertAlmostEqual(K.volume(next(iter(b.doc.state.parts.values())).shape),3200,places=5)
+        b.call({"op":"undo"});b.call({"op":"undo"})
+        self.assertEqual(len(b.doc.features),1)
+
+    def test_native_manipulators_and_failure_diagnostics(self):
+        sid,_=self.sketch("rect",[(10,0),(30,10)])
+        r=self.preview("extrude",sketch=sid,regions=[0],value=10,second=True,depth2=4)
+        self.assertEqual([a["key"] for a in r["manipulators"]],["value","depth2"])
+        self.assertEqual(r["manipulators"][1]["value"],4)
+        r=self.preview("extrude",sketch=sid,regions=[0],value=10,end="symmetric")
+        self.assertEqual(r["manipulators"][0]["factor"],2)
+        b.call({"op":"demo"})
+        part=next(iter(b.doc.state.parts.values()))
+        r=self.preview("fillet",edges=[{"part":part.id,"index":0}],value=1)
+        self.assertTrue(r["manipulators"][0]["drag"])
+        r=self.preview("fillet",edges=[{"part":part.id,"index":0}],value=100,diagnostic=True)
+        self.assertIn("error",r);self.assertTrue(r["outlines"])
+
+    def test_surface_has_no_solid_volume(self):
+        sid,_=self.sketch("rect",[(10,0),(30,10)])
+        curves=[{"kind":"region_edge","sketch":sid,"index":0,"edge":i} for i in range(4)]
+        r=self.preview("extrude",creation="surface",curves=curves,value=15)
+        self.assertAlmostEqual(r["area"],900,places=5)
+        self.assertEqual(r["volume"],0)
+        r=self.op("extrude",creation="surface",curves=curves,value=15)
+        self.assertEqual(r["volume"],0)
+
+    def test_document_length_units(self):
+        sid,_=self.sketch("rect",[(10,0),(30,10)])
+        b.doc.units="cm"
+        r=self.preview("extrude",sketch=sid,regions=[0],value="2")
+        self.assertAlmostEqual(r["volume"],4000,places=5)
+        r=self.preview("extrude",sketch=sid,regions=[0],value="2 mm")
+        self.assertAlmostEqual(r["volume"],400,places=5)
+
+    def test_chain_catalog(self):
+        sid,_=self.sketch("rect",[(10,0),(30,10)])
+        catalog=b.call({"op":"solid_context","kind":"extrude"})["catalog"]["sketches"][sid]
+        self.assertEqual(len(catalog["curves"]),4)
+        self.assertTrue(all(len(c["chain"])==4 for c in catalog["curves"]))
+
 if __name__=="__main__":unittest.main()

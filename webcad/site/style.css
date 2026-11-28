@@ -6,3 +6,9 @@
 .variable-completion{position:fixed;z-index:1000;background:#fff;border:1px solid #8ca4bd;box-shadow:0 3px 12px #0004;border-radius:4px;max-height:180px;overflow:auto;padding:3px;display:flex;flex-direction:column}.variable-completion button{border:0;text-align:left;border-radius:2px;white-space:nowrap;background:white}.variable-completion button.active,.variable-completion button:hover{background:#c8def7}.variable-completion button:focus-visible{outline:2px solid #246dc5}
 
 #solid-dialog{max-height:calc(100% - 24px);overflow:auto}#solid-dialog fieldset{border:1px solid #b1becb;padding:6px;margin:3px 0}#solid-dialog select[multiple]{width:100%;min-height:54px}#solid-dialog label small{font-size:11px;color:#526479}#solid-dialog [hidden]{display:none!important}
+
+#solid-manipulators{position:absolute;inset:0;width:100%;height:100%;z-index:3;pointer-events:none;overflow:hidden}
+#solid-manipulators .manip-hit{pointer-events:all;cursor:grab;touch-action:none}
+#solid-manipulators .manip-hit:active{cursor:grabbing}
+#solid-new-variable{width:100%;color:#176a37;font-weight:600}
+#solid-dialog input[inputmode=decimal]{width:100%;min-width:0}

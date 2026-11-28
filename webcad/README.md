@@ -208,5 +208,13 @@ tangent propagation. Existing features can be reopened in their original
 history context and edited atomically; cancel restores the final model.
 All previews use the native kernel. Selection is available from the view
 and enumerated reference lists; the lists also expose planes and vertices.
-Desktop-specific draggable feature arrows, automatic operation/direction
-inference and exact chain-selection interaction are not included.
+
+## 0.3.11.1 — body dialog interaction
+
+Native automatic contact/scope and up-to direction inference; draggable
+extrude and fillet arrows, click-to-flip revolve and up-to arrows; curve
+preselection and connected chains; selection transfer between body modes;
+unit-aware numeric expressions and inline typed variables; invalid reference
+recovery and oversized-fillet diagnostics. Surface-only geometry contributes
+zero to the solid volume metric. See PARITY_GATE.md for the acceptance gate;
+publication alone does not close the milestone.
