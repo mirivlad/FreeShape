@@ -346,7 +346,7 @@ try {
  // Smart snapping: actual hover acquisition, guide constraint and virtual center.
  await menuCommand("new");await volume(0);
  await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});
- async function hoverSnap(x,y,label){await page.mouse.move(...await screenPoint(x,y));await page.waitForFunction(label=>document.querySelector("#sketch-canvas").dataset.snap.includes(label),label);}
+ async function hoverSnap(x,y,label){await page.mouse.move(...await screenPoint(x,y));await page.waitForFunction(label=>document.querySelector("#sketch-canvas").dataset.snap.includes(label),label,{timeout:10000}).catch(async e=>{throw Error("Expected snap "+label+" at "+x+","+y+"; got "+await page.locator("#sketch-canvas").getAttribute("data-snap"),{cause:e});});}
  await page.locator('[data-tool="rect"]').click();await parityAt(-30,-15);await parityAt(-10,5);await objects(4);
  await page.locator('[data-tool="point"]').click();
  await hoverSnap(-20,-5,"Центр прямоугольника");await parityAt(-20,-5);await objects(6);
@@ -364,7 +364,7 @@ try {
  await page.locator('[data-tool="line"]').click();
  await hoverSnap(-20,-15,"Середина");
  await parityAt(-25,5);
- await hoverSnap(-5,15.5,"Параллельно");await parityAt(-5,15.5);await objects(2);await conCount("parallel",1);
+ await hoverSnap(-2,17,"Параллельно");await parityAt(-2,17);await objects(2);await conCount("parallel",1);
  await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});
  console.log("PASS awakened parallel inference persists as native constraint");
  await menuCommand("demo");await volume(12000);
@@ -376,6 +376,44 @@ try {
  const ms=JSON.parse((await save()).toString()).features.at(-1).params.sketch;
  assert(Object.values(ms.entities).some(e=>e.model_snap&&e.helper&&e.construction));
  console.log("PASS coplanar model midpoint and edge constraints");
+ // Interaction parity: box selection, live native drag and dimensions with expressions.
+ await menuCommand("new");await volume(0);
+ await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});
+ await page.locator('[data-tool="line"]').click();await conAt(-30,-10,true);await conAt(-10,-10,true);await objects(1);
+ await page.locator('[data-tool="line"]').click();await conAt(-30,10,true);await conAt(-10,10,true);await objects(2);
+ await page.locator('[data-tool="select"]').click();
+ async function dragAt(x1,y1,x2,y2){await page.mouse.move(...await screenPoint(x1,y1));await page.mouse.down();await page.mouse.move(...await screenPoint(x2,y2),{steps:8});await page.mouse.up();}
+ await dragAt(-35,-5,-5,-15);
+ await page.waitForFunction(()=>document.querySelector("#sk-info").textContent.includes("выбрано: 1"));
+ await dragAt(-15,15,-25,5);
+ await page.waitForFunction(()=>document.querySelector("#sk-info").textContent.includes("выбрано: 1"));
+ await page.mouse.move(...await screenPoint(-20,-10));await page.mouse.down();
+ const liveRev=Number(await page.locator("#sketch-canvas").getAttribute("data-drag-preview")||0);
+ await page.mouse.move(...await screenPoint(-15,-20),{steps:8});
+ await page.waitForFunction(n=>Number(document.querySelector("#sketch-canvas").dataset.dragPreview)>n,liveRev);
+ const committedRev=await page.locator("#sk-info").getAttribute("data-revision");
+ await page.mouse.up();await page.waitForFunction(r=>document.querySelector("#sk-info").dataset.revision!==r&&document.body.dataset.status==="Готово",committedRev);
+ await page.locator("#sk-undo").click();await objects(2);await page.locator("#sk-redo").click();await objects(2);
+ await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});
+ const moved=JSON.parse((await save()).toString()).features[0].params.sketch,ml=Object.values(moved.entities)[0];
+ assert(Math.abs(moved.points[ml.p1][0]+25)<.15);assert(Math.abs(moved.points[ml.p1][1]+20)<.15);
+ console.log("PASS window and crossing selection, live native entity drag and undo/redo");
+ await menuCommand("new");await volume(0);
+ let prompts=["width","20"];const answerDialog=async dialog=>dialog.accept(prompts.shift());
+ page.on("dialog",answerDialog);await menuCommand("variable");await page.waitForFunction(()=>document.querySelector("#features").textContent.includes("#width"));page.off("dialog",answerDialog);
+ await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});
+ await page.locator('[data-tool="line"]').click();await conAt(-30,-10,true);await conAt(-10,-10,true);await objects(1);
+ await page.locator("#sk-offer-value").fill("#width + 5 mm");await page.locator("#sk-offer-value").press("Enter");
+ await page.waitForFunction(()=>document.querySelector("#sk-constraints input")?.value==="#width + 5 mm");
+ await page.locator('[data-tool="select"]').click();
+ const label=page.locator("#dimension-overlay .dimension-label").first(),lb=await label.boundingBox();
+ const posRev=await page.locator("#sk-info").getAttribute("data-revision");
+ await page.mouse.move(lb.x+lb.width/2,lb.y+lb.height/2);await page.mouse.down();await page.mouse.move(...await screenPoint(-20,-25),{steps:6});await page.mouse.up();
+ await page.waitForFunction(r=>document.querySelector("#sk-info").dataset.revision!==r&&document.body.dataset.status==="Готово",posRev);
+ await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});
+ const vs=JSON.parse((await save()).toString()),vc=vs.features[1].params.sketch.constraints.find(c=>c.type==="distance");
+ assert.equal(vc.expr,"#width + 5 mm");assert.equal(vc.value,25);assert(Math.abs(vc.pos[1]+25)<.15);
+ console.log("PASS variable expression dimension and draggable annotation");
  await menuCommand("offline");
  await page.waitForFunction(()=>document.body.dataset.offline==="ready"||document.querySelector("#errors").textContent.trim(),{},{timeout:240000});await noError();
  await context.setOffline(true);await page.reload();await ready();await volume(0);

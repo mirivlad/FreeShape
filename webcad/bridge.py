@@ -13,6 +13,7 @@ from freeshape.document import Document
 from freeshape.sketch import Sketch
 from freeshape import sketch_ops as OPS
 from freeshape.ui import smart_snap as SS
+from freeshape.expr import parse_number, has_vars
 
 doc = None
 draft = None
@@ -67,7 +68,7 @@ def summary(d):
     meshes = state_meshes(d.state, d.hidden_parts)
     return {"name": d.name, "units": d.units, "parts": [{"id": p.id, "name": p.name} for p in d.state.parts.values()], "undo": d.can_undo(), "redo": d.can_redo(), "features": [{"id": f["id"], "name": f.get("name", f["type"]),
             "type": f["type"], "depth": f.get("params", {}).get("depth"),
-            "params": {k: v for k, v in f.get("params", {}).items() if k in ("depth", "radius", "distance", "op", "end", "flip", "angle")},
+            "params": {k: v for k, v in f.get("params", {}).items() if k in ("depth", "radius", "distance", "op", "end", "flip", "angle", "name", "expr")},
             "regions": len(d.state.sketches[f["id"]].regions) if f["id"] in d.state.sketches else 0,
             "suppressed": f.get("suppressed", False)} for f in d.features],
             "errors": d.errors, "meshes": meshes,
@@ -129,7 +130,7 @@ def sketch_view():
             "undo": bool(draft["undo"]), "redo": bool(draft["redo"]),
             "rectangle_centres": [{"uv": q.tolist(), "diagonal": list(ab), "ids": list(ids)}
                                   for q, ab, ids in SS.rectangle_centres(s)],
-            "model_edges": draft["model_edges"]}
+            "model_edges": draft["model_edges"], "variables": draft["variables"]}
 
 
 def model_snap_geometry(state, plane, hidden=()):
@@ -202,7 +203,7 @@ def begin_sketch(req):
     index = next(i for i,f in enumerate(doc.features) if f["id"]==fid) if fid else doc.insert_index()
     state = doc.state_before(index)
     model_edges = model_snap_geometry(state, F.resolve_plane(state,plane), doc.hidden_parts)
-    draft = {"id": fid, "plane": plane, "sketch": s, "undo": [], "redo": [], "model_edges": model_edges}
+    draft = {"id": fid, "plane": plane, "sketch": s, "undo": [], "redo": [], "model_edges": model_edges, "variables": dict(state.vars)}
     return sketch_view()
 
 
@@ -499,6 +500,129 @@ class SketchConstraintSelection:
         return frozenset(refs[:2])
 
 
+def drag_geometry(s, req, old_bad):
+    """Compute a drag from the committed sketch, never from the previous preview."""
+    pid = req["id"]
+    target = np.asarray([number(v) for v in req["uv"]])
+    if len(target) != 2:
+        raise ValueError("Invalid drag target")
+    if pid in s.points:
+        if pid == "origin":
+            return
+        targets = {pid: target.tolist()}
+    elif pid in s.entities:
+        ent = s.entities[pid]
+        if ent["type"] == "circle":
+            radius = max(1e-3, float(np.linalg.norm(target-s.P(ent["c"]))))
+            s.entities[pid]["r"] = radius
+            s.solve(weights={(pid,"r"):1e3}, ignore=old_bad)
+            return
+        delta = target-np.asarray([number(v) for v in req["start"]])
+        targets = {p:(s.P(p)+delta).tolist() for p in s.entity_points(pid) if p!="origin"}
+    else:
+        raise ValueError("Select a movable point or curve")
+    for p,q in targets.items():
+        s.points[p]=q
+    weights={(p,j):1e3 for p in targets for j in (0,1)}
+    trial=s.copy()
+    pins=[trial.add_constraint("fix",p,value=q) for p,q in targets.items()]
+    trial.solve(ignore=old_bad)
+    if not (set(trial.status.get("bad",[]))-old_bad) and all(math.dist(trial.points[p],q)<1e-6 for p,q in targets.items()):
+        s.points,s.entities=trial.points,trial.entities
+    s.solve(weights=weights,ignore=old_bad)
+
+
+def drag_preview(req):
+    original=draft["sketch"]
+    trial=original.copy()
+    old_bad=set(original.status.get("bad",[]))
+    drag_geometry(trial,req,old_bad)
+    if set(trial.status.get("bad",[]))-old_bad:
+        trial=original.copy()
+        trial.solve(ignore=old_bad)
+    draft["sketch"]=trial
+    try:
+        return sketch_view()
+    finally:
+        draft["sketch"]=original
+
+
+def dimension_value(value,kind):
+    if len(str(value))>256:
+        raise ValueError("Dimension expression is too long")
+    val=parse_number(value,angle=kind=="angle",variables=draft["variables"])
+    if val is None:
+        raise ValueError("Invalid expression or unknown variable")
+    val=number(val,1e-8)
+    if kind=="angle" and val>180:
+        raise ValueError("Angle must not exceed 180 degrees")
+    return val
+
+
+def set_dimension(s, kind, refs, value, pos=None):
+    # Convert point entities and circular centers to native point references.
+    refs=list(refs)
+    ents=s.entities
+    def ptof(ref):
+        return ref if ref in s.points else ents.get(ref,{}).get("c",ents.get(ref,{}).get("p"))
+    if kind=="auto":
+        if len(refs)==1:
+            typ=ents.get(refs[0],{}).get("type")
+            kind={"line":"distance","circle":"diameter","arc":"radius","ellipse":"radius","ellipse_arc":"radius"}.get(typ)
+        elif len(refs)==2:
+            if all(ents.get(r,{}).get("type")=="line" for r in refs):
+                a,b=[ents[r] for r in refs]
+                u=s.P(a["p2"])-s.P(a["p1"]);v=s.P(b["p2"])-s.P(b["p1"])
+                if abs(float(u[0]*v[1]-u[1]*v[0]))/max(np.linalg.norm(u)*np.linalg.norm(v),1e-12)<1e-3:
+                    refs=[b["p1"],refs[0]]
+                    kind="distance"
+                else:
+                    kind="angle"
+            elif any(ents.get(r,{}).get("type")=="line" for r in refs):
+                kind="distance"
+            else:
+                a,b=[ptof(r) for r in refs]
+                kind="distance"
+                if a and b and pos is not None:
+                    A,B=s.P(a),s.P(b)
+                    lo,hi=np.minimum(A,B),np.maximum(A,B)
+                    if abs(A[0]-B[0])>1e-6 and abs(A[1]-B[1])>1e-6:
+                        if lo[0]<=pos[0]<=hi[0] and not lo[1]<=pos[1]<=hi[1]:kind="hdistance"
+                        elif lo[1]<=pos[1]<=hi[1] and not lo[0]<=pos[0]<=hi[0]:kind="vdistance"
+    if kind in ("distance","hdistance","vdistance"):
+        if len(refs)==1 and ents.get(refs[0],{}).get("type")=="line":
+            e=ents[refs[0]]
+            a,b=s.P(e["p1"]),s.P(e["p2"])
+            current=math.dist(a,b) if kind=="distance" else abs(b[0 if kind=="hdistance" else 1]-a[0 if kind=="hdistance" else 1])
+        elif len(refs)==2:
+            if kind=="distance" and any(ents.get(r,{}).get("type")=="line" for r in refs):
+                if ents.get(refs[0],{}).get("type")=="line":refs.reverse()
+                p=ptof(refs[0]);e=ents.get(refs[1],{})
+                if p is None or e.get("type")!="line":raise ValueError("Select point and line")
+                refs[0]=p
+                a,b=s.P(e["p1"]),s.P(e["p2"])
+                d=b-a
+                current=abs(float(d[0]*(s.P(p)-a)[1]-d[1]*(s.P(p)-a)[0]))/max(np.linalg.norm(d),1e-12)
+            else:
+                refs=[ptof(r) for r in refs]
+                if any(r is None for r in refs):raise ValueError("Select two points")
+                a,b=map(s.P,refs)
+                current=math.dist(a,b) if kind=="distance" else abs(b[0 if kind=="hdistance" else 1]-a[0 if kind=="hdistance" else 1])
+        else:raise ValueError("Select a line or two points")
+    elif kind in ("radius","diameter") and len(refs)==1 and ents.get(refs[0],{}).get("type") in ("circle","arc","ellipse","ellipse_arc"):
+        current=s.radius(refs[0])*(2 if kind=="diameter" else 1)
+    elif kind=="angle" and len(refs)==2 and all(ents.get(r,{}).get("type")=="line" for r in refs):
+        a,b=[ents[r] for r in refs]
+        u=s.P(a["p2"])-s.P(a["p1"]);v=s.P(b["p2"])-s.P(b["p1"])
+        current=math.degrees(math.atan2(abs(float(u[0]*v[1]-u[1]*v[0])),float(u@v)))
+    else:raise ValueError("Invalid dimension selection")
+    value=current if value is None else value
+    c=s.add_constraint(kind,*refs,value=dimension_value(value,kind))
+    if has_vars(str(value)):c["expr"]=str(value)
+    if pos is not None:c["pos"]=[number(v) for v in pos]
+    return c
+
+
 def sketch_edit(req):
     s = draft["sketch"]
     before = s.to_dict()
@@ -648,22 +772,12 @@ def sketch_edit(req):
             else:
                 raise ValueError("Unknown modification tool")
         elif op == "sketch_drag":
-            pid = req["id"]
-            if pid not in s.points or pid == "origin":
-                raise ValueError("Select a movable point")
-            target = [number(v) for v in req["uv"]]
-            # Aim for the actual cursor, not merely a weighted compromise. If
-            # the exact target is constrained, fall back to the desktop-style
-            # weighted solve without adding a permanent constraint.
-            s.points[pid] = target
-            trial = Sketch.from_dict(s.to_dict())
-            pin = trial.add_constraint("fix", pid, value=target)
-            trial.solve(ignore=old_bad)
-            if not (set(trial.status.get("bad", [])) - old_bad) and math.dist(trial.points[pid], target) < 1e-6:
-                trial.constraints.remove(pin)
-                s.points = trial.points
-                s.entities = trial.entities
-            weights = {(pid, 0): 1e3, (pid, 1): 1e3}
+            drag_geometry(s,req,old_bad)
+        elif op == "sketch_dimension_pos":
+            c=next(c for c in s.constraints if c["id"]==req["id"])
+            if c["type"] not in ("distance","hdistance","vdistance","radius","diameter","angle"):
+                raise ValueError("Not a dimension")
+            c["pos"]=[number(v) for v in req["uv"]]
         elif op == "sketch_offer_dimension":
             kind, refs = req["kind"], req["refs"]
             if len(refs) != 1 or refs[0] not in s.entities:
@@ -673,12 +787,14 @@ def sketch_edit(req):
             if not ((kind == "distance" and typ == "line") or
                     (kind in ("radius","diameter") and typ in ("circle","arc","ellipse"))):
                 raise ValueError("Invalid drawing dimension")
-            s.add_constraint(kind,eid,value=number(req["value"],1e-8))
+            set_dimension(s,kind,[eid],req["value"],req.get("pos"))
         elif op == "sketch_dimension":
             c = next(c for c in s.constraints if c["id"] == req["id"])
-            if c["type"] not in ("distance","hdistance","vdistance","radius","diameter","angle") or "expr" in c:
+            if c["type"] not in ("distance","hdistance","vdistance","radius","diameter","angle"):
                 raise ValueError("This dimension cannot be edited here")
-            c["value"] = number(req["value"], 1e-8)
+            c["value"] = dimension_value(req["value"],c["type"])
+            if has_vars(str(req["value"])):c["expr"]=str(req["value"])
+            else:c.pop("expr",None)
             old_bad.discard(c["id"])
         elif op == "sketch_delete":
             s.delete(req["ids"])
@@ -692,15 +808,8 @@ def sketch_edit(req):
                     raise ValueError("Invalid selection")
                 if not SketchConstraintSelection(s).apply(kind, refs):
                     raise ValueError("Invalid selection for " + kind)
-            elif kind in ("distance","hdistance","vdistance"):
-                if not ((len(refs)==1 and ents.get(refs[0],{}).get("type")=="line") or
-                        (len(refs)==2 and all(p in s.points for p in refs))):
-                    raise ValueError("Select one line or two points")
-                s.add_constraint(kind,*refs,value=number(req["value"],1e-8))
-            elif kind in ("radius","diameter"):
-                if len(refs)!=1 or ents.get(refs[0],{}).get("type") not in ("circle","arc","ellipse","ellipse_arc"):
-                    raise ValueError("Select a circular or elliptical curve")
-                s.add_constraint(kind,*refs,value=number(req["value"],1e-8))
+            elif kind in ("distance","hdistance","vdistance","radius","diameter","angle","auto"):
+                set_dimension(s,kind,refs,req.get("value"),req.get("pos"))
             else:
                 raise ValueError("Unsupported constraint")
         if not s.solve(weights=weights, ignore=old_bad) and set(s.status.get("bad", [])) - old_bad:
@@ -808,6 +917,17 @@ def call(request):
         draft = None
     elif doc is None:
         raise ValueError("Open or create a document first")
+    elif op == "variable":
+        name=str(request["name"]).strip().lstrip("#")
+        expr=str(request["expr"]).strip()
+        if len(name)>64 or len(expr)>256:
+            raise ValueError("Variable is too long")
+        f=copy.deepcopy(doc.feature(request["id"])) if request.get("id") else doc.make_feature("variable")
+        if f["type"]!="variable":
+            raise ValueError("Select a variable")
+        f["params"].update(name=name,expr=expr)
+        f["name"]="#"+name
+        transaction(lambda: doc.replace_feature(f) if request.get("id") else doc.add_feature(f))
     elif op == "depth":
         value = float(request["value"])
         if not math.isfinite(value) or not 0 < value <= 100000:
@@ -819,7 +939,7 @@ def call(request):
         transaction(lambda: doc.replace_feature(f))
     elif op == "begin_sketch":
         return begin_sketch(request)
-    elif op in ("sketch_draw","sketch_delete","sketch_constraint","sketch_drag","sketch_dimension","sketch_modify","sketch_offer_dimension"):
+    elif op in ("sketch_draw","sketch_delete","sketch_constraint","sketch_drag","sketch_dimension","sketch_modify","sketch_offer_dimension","sketch_dimension_pos"):
         return sketch_edit(request)
     elif op in ("sketch_undo","sketch_redo"):
         source,target = ("undo","redo") if op=="sketch_undo" else ("redo","undo")
@@ -828,6 +948,8 @@ def call(request):
             draft["sketch"] = Sketch.from_dict(draft[source].pop())
             draft["sketch"].solve()
         return sketch_view()
+    elif op == "sketch_drag_preview":
+        return drag_preview(request)
     elif op == "sketch_spline_preview":
         pts = [[number(v) for v in p] for p in request["points"]]
         if len(pts) > 128:

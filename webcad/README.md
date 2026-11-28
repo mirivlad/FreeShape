@@ -172,3 +172,16 @@ the sketch panel also exposes snapping, characteristic points, guides and
 relations switches. Model references are static projections as in desktop,
 not associative external links. Automatic intersection with ellipses/splines
 and live constrained dragging remain outside this milestone.
+
+## 0.3.10 — sketch interaction parity
+
+Window selection (left-to-right) encloses complete objects; crossing selection
+(right-to-left) includes intersected curves, with Shift/Ctrl additive selection.
+Dragging points, lines and other curves previews native solved geometry using a
+single in-flight worker request; circles resize from the rim. The final drag
+is one undo step. Dimension labels can be dragged to persisted sketch positions
+or clicked to edit. Angle and point-to-line dimensions, an automatic dimension
+tool (D), numeric expressions and named document variables are supported.
+Create or edit a variable in the Tools menu before editing a sketch; expressions
+such as #width + 5 mm remain native and re-evaluate on rebuild. Inline creation
+of unknown variables and full desktop dimension interaction are not implemented.

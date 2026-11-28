@@ -105,7 +105,7 @@ function filterTree(){const q=$("feature-filter").value.toLowerCase();for(const 
 function selectedFeature(){return current?.features.find(x=>x.id===selected);}
 function selectFeature(){const f=selectedFeature();$("feature-actions").hidden=!f;$("edit-sketch").hidden=f?.type!=="sketch";$("suppress").textContent=f?.suppressed?"Восстановить":"Подавить";$("edit").hidden=sketchEditor.active||!(f?.type==="extrude"&&typeof f.depth==="number");if(!$("edit").hidden)$("depth").value=f.depth;drawRegions();buttons();}
 function buttons(){const active=sketchEditor?.active;
- for(const id of ["new","demo","open","save","step","stl","rebuild","fit","apply","sketch","extrude","revolve","fillet","chamfer","undo","redo"]){
+ for(const id of ["new","demo","open","save","step","stl","rebuild","variable","fit","apply","sketch","extrude","revolve","fillet","chamfer","undo","redo"]){
   const needsDoc=!["new","demo","open"].includes(id);
   $(id).disabled=!ready||busy||!!active||(needsDoc&&!current)||(id==="undo"&&!current?.undo)||(id==="redo"&&!current?.redo)||(["fillet","chamfer","step","stl"].includes(id)&&!current?.meshes.length)||(["extrude","revolve"].includes(id)&&!current?.features.some(f=>f.regions>0));
  }
@@ -152,6 +152,12 @@ $("solid-dialog").addEventListener("input",schedulePreview);
 $("solid-dialog").addEventListener("change",()=>{drawRegions();schedulePreview();});
 $("solid-cancel").onclick=closeSolid;
 $("solid-dialog").onsubmit=async e=>{e.preventDefault();const args=solidArgs();clearPreview();const r=await run("solid",args,true);if(r)closeSolid();else schedulePreview();};
+$("variable").onclick=()=>{
+ const f=selectedFeature(),existing=f?.type==="variable"?f:null;
+ const name=prompt("Имя переменной (без #)",existing?.params?.name||"");if(!name?.trim())return;
+ const expr=prompt("Значение или выражение",existing?.params?.expr||"10");if(!expr?.trim())return;
+ run("variable",{id:existing?.id,name:name.trim(),expr:expr.trim()});
+};
 $("new").onclick=()=>run("new",{},true);$("demo").onclick=()=>run("demo",{},true);$("open").onclick=()=>$("file").click();
 $("file").onchange=async()=>{const f=$("file").files[0];if(f){if(f.size>100*1024*1024)error("Файл больше 100 МиБ");else await run("open",{content:await f.text()},true);}$("file").value="";};
 $("save").onclick=()=>run("save");$("step").onclick=()=>run("export",{format:"step"});$("stl").onclick=()=>run("export",{format:"stl"});$("rebuild").onclick=()=>run("rebuild");$("fit").onclick=fit;

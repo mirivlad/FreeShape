@@ -341,6 +341,71 @@ class SketchTools(unittest.TestCase):
         r=bridge.call({"op":"begin_sketch","id":bridge.doc.features[0]["id"]})
         self.assertFalse(r["model_edges"]) # future extrusion is not a reference
 
+    def test_entity_drag_preview_is_read_only_and_matches_commit(self):
+        r=self.draw("line",[(10,10),(30,10)])
+        eid=next(iter(r["draft"]["entities"]))
+        before=bridge.draft["sketch"].to_dict()
+        count=len(bridge.draft["undo"])
+        req={"id":eid,"start":[20,10],"uv":[25,20]}
+        preview=bridge.call({"op":"sketch_drag_preview",**req})
+        self.assertEqual(bridge.draft["sketch"].to_dict(),before)
+        self.assertEqual(len(bridge.draft["undo"]),count)
+        self.assertAlmostEqual(preview["draft"]["points"][preview["draft"]["entities"][eid]["p1"]][0],15,places=6)
+        committed=bridge.call({"op":"sketch_drag",**req})
+        self.assertEqual(preview["draft"],committed["draft"])
+        self.assertEqual(len(bridge.draft["undo"]),count+1)
+        bridge.call({"op":"sketch_undo"})
+        self.assertEqual(bridge.draft["sketch"].to_dict(),before)
+
+    def test_circle_drag_radius_and_fixed_fallback(self):
+        r=self.draw("circle",[(10,10),(15,10)])
+        eid=next(iter(r["draft"]["entities"]))
+        req={"id":eid,"start":[15,10],"uv":[18,10]}
+        p=bridge.call({"op":"sketch_drag_preview",**req})
+        self.assertAlmostEqual(p["draft"]["entities"][eid]["r"],8,places=6)
+        bridge.call({"op":"sketch_drag",**req})
+        self.geometric("fix",eid)
+        p=bridge.call({"op":"sketch_drag_preview",**{**req,"uv":[30,10]}})
+        self.assertAlmostEqual(p["draft"]["entities"][eid]["r"],8,places=6)
+
+    def test_dimension_point_line_angle_and_position(self):
+        r=self.draw("line",[(10,10),(30,10)])
+        a=next(iter(r["draft"]["entities"]))
+        b=next(i for i,e in self.draw("line",[(40,10),(50,20)])["draft"]["entities"].items() if i!=a)
+        r=bridge.call({"op":"sketch_constraint","kind":"angle","refs":[a,b],"value":"60","pos":[35,30]})
+        c=r["draft"]["constraints"][-1]
+        self.assertEqual(c["value"],60)
+        r=bridge.call({"op":"sketch_dimension_pos","id":c["id"],"uv":[33,22]})
+        self.assertEqual(r["draft"]["constraints"][-1]["pos"],[33,22])
+        point=next(i for i,e in self.draw("point",[(20,25)])["draft"]["entities"].items() if e["type"]=="point")
+        r=bridge.call({"op":"sketch_constraint","kind":"distance","refs":[point,a],"value":"2*10"})
+        c=r["draft"]["constraints"][-1]
+        self.assertEqual(c["value"],20)
+        self.assertEqual(c["refs"][1],a)
+        self.assertFalse(r["bad"])
+
+    def test_variable_driven_dimension_rebuild_and_invalid_expression(self):
+        bridge.call({"op":"new"})
+        bridge.call({"op":"variable","name":"width","expr":"20"})
+        vid=bridge.doc.features[0]["id"]
+        bridge.call({"op":"begin_sketch","plane":"Top"})
+        r=self.draw("line",[(10,10),(25,10)])
+        eid=next(iter(r["draft"]["entities"]))
+        r=bridge.call({"op":"sketch_constraint","kind":"distance","refs":[eid],"value":"#width + 5 mm"})
+        c=r["draft"]["constraints"][-1]
+        self.assertEqual(c["value"],25)
+        self.assertEqual(c["expr"],"#width + 5 mm")
+        before=bridge.draft["sketch"].to_dict()
+        with self.assertRaises(ValueError):
+            bridge.call({"op":"sketch_dimension","id":c["id"],"value":"#missing"})
+        self.assertEqual(bridge.draft["sketch"].to_dict(),before)
+        bridge.call({"op":"sketch_finish"})
+        fid=bridge.doc.features[1]["id"]
+        bridge.call({"op":"variable","id":vid,"name":"width","expr":"30"})
+        sk=bridge.doc.state.sketches[fid].sketch
+        e=sk.entities[eid]
+        self.assertAlmostEqual(math.dist(sk.P(e["p1"]),sk.P(e["p2"])),35,places=6)
+
     def test_bad_inputs_roll_back(self):
         for tool, points, args in [
             ("ellipse", [(0, 0), (10, 0), (5, 0)], {}),
