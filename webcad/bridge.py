@@ -12,6 +12,7 @@ from freeshape import __version__, kernel as K, features as F
 from freeshape.document import Document
 from freeshape.sketch import Sketch
 from freeshape import sketch_ops as OPS
+from freeshape.ui import smart_snap as SS
 
 doc = None
 draft = None
@@ -125,7 +126,54 @@ def sketch_view():
             "dof": s.status.get("dof"), "bad": list(s.status.get("bad", [])),
             "curves": {eid: [q.tolist() for q in s.polylines(eid, 80)]
                        for eid in s.entities if s.entities[eid]["type"] not in ("image", "text")},
-            "undo": bool(draft["undo"]), "redo": bool(draft["redo"])}
+            "undo": bool(draft["undo"]), "redo": bool(draft["redo"]),
+            "rectangle_centres": [{"uv": q.tolist(), "diagonal": list(ab), "ids": list(ids)}
+                                  for q, ab, ids in SS.rectangle_centres(s)],
+            "model_edges": draft["model_edges"]}
+
+
+def model_snap_geometry(state, plane, hidden=()):
+    """Cache exact in-plane model edges; never snap to edges behind the sketch."""
+    out = []
+    for part in state.parts.values():
+        if part.id in hidden:
+            continue
+        lo, hi = K.bbox(part.shape)
+        tol = 1e-6 * max(1., float(np.linalg.norm(hi-lo)))
+        for i, edge in enumerate(K.edges(part.shape)):
+            try:
+                poly = np.asarray(K.discretize_edge(edge), float)
+                if len(poly) < 2 or np.abs((poly-plane.origin) @ plane.normal).max() > tol:
+                    continue
+                uv = np.array([plane.to_local(q) for q in poly])
+                info = K.edge_info(edge)
+                closed = np.linalg.norm(poly[0]-poly[-1]) < 1e-7
+                pts = [] if closed else [{"uv": uv[0].tolist(), "label":"Вершина модели"},
+                                         {"uv": uv[-1].tolist(), "label":"Вершина модели"}]
+                item = {"id": f"{part.id}:{i}", "path": uv.tolist(), "points": pts}
+                if "r" in info and abs(abs(np.asarray(info["axis"]) @ plane.normal)-1) < 1e-6:
+                    c = np.array(plane.to_local(info["center"]))
+                    item.update(kind="circle", c=c.tolist(), r=info["r"])
+                    pts.append({"uv": c.tolist(), "label":"Центр ребра модели"})
+                    if not closed:
+                        a,b,m = uv[0],uv[-1],uv[len(uv)//2]
+                        angle = lambda q: math.atan2(q[1]-c[1],q[0]-c[0])
+                        start,end = angle(a),angle(b)
+                        if (angle(m)-start)%(2*math.pi) > (end-start)%(2*math.pi):
+                            a,b=b,a
+                            start,end=end,start
+                        item.update(arc=[start,(end-start)%(2*math.pi)], a=a.tolist(), b=b.tolist())
+                elif not closed:
+                    a,b=uv[0],uv[-1]
+                    d=b-a
+                    off=np.abs((uv-a) @ np.array([-d[1],d[0]]))/max(np.linalg.norm(d),1e-12)
+                    if np.linalg.norm(d)>1e-9 and off.max()<tol:
+                        item.update(kind="line",a=a.tolist(),b=b.tolist())
+                        pts.append({"uv": ((a+b)/2).tolist(), "label":"Середина ребра модели"})
+                out.append(item)
+            except (RuntimeError, ValueError, K.KernelError):
+                continue
+    return out
 
 
 def begin_sketch(req):
@@ -151,30 +199,97 @@ def begin_sketch(req):
             plane = {"kind": "std", "name": name}
         s = Sketch()
     s.solve()
-    draft = {"id": fid, "plane": plane, "sketch": s, "undo": [], "redo": []}
+    index = next(i for i,f in enumerate(doc.features) if f["id"]==fid) if fid else doc.insert_index()
+    state = doc.state_before(index)
+    model_edges = model_snap_geometry(state, F.resolve_plane(state,plane), doc.hidden_parts)
+    draft = {"id": fid, "plane": plane, "sketch": s, "undo": [], "redo": [], "model_edges": model_edges}
     return sketch_view()
 
 
+def fixed_point(s, uv):
+    pid=s.add_point(*uv)
+    s.add_constraint("fix",pid,value=list(uv))
+    return pid
+
+
+def model_ref(s, ref, uv):
+    item=next((e for e in draft["model_edges"] if e["id"]==ref["id"]),None)
+    if item is None:
+        raise ValueError("Unknown model edge")
+    if ref["kind"]=="model_point":
+        i=int(ref["index"])
+        if not 0<=i<len(item["points"]):
+            raise ValueError("Unknown model point")
+        return fixed_point(s,item["points"][i]["uv"])
+    eid=next((i for i,e in s.entities.items() if e.get("model_snap")==item["id"]),None)
+    if eid is None:
+        if item.get("kind")=="line":
+            eid=s.add_line(fixed_point(s,item["a"]),fixed_point(s,item["b"]),True)
+        elif item.get("kind")=="circle":
+            c=fixed_point(s,item["c"])
+            if "arc" in item:
+                eid=s.add_arc(c,fixed_point(s,item["a"]),fixed_point(s,item["b"]),True)
+            else:
+                eid=s.add_circle(c,item["r"],True)
+                s.add_constraint("radius",eid,value=item["r"])
+        else:
+            return fixed_point(s,uv)
+        s.entities[eid].update(helper=True,model_snap=item["id"])
+    pid=s.add_point(*uv)
+    s.add_constraint("point_on",pid,eid)
+    return pid
+
+
 def point_at(s, p):
-    x, y = [number(v) for v in p["uv"]]
-    ref = p.get("ref")
-    if ref and ref["kind"] == "point" and ref["id"] in s.points:
+    x,y=[number(v) for v in p["uv"]]
+    ref=p.get("ref") or {}
+    kind=ref.get("kind")
+    if kind=="point" and ref["id"] in s.points:
         return ref["id"]
-    pid = s.add_point(x, y)
-    if ref:
-        kind = ref["kind"]
-        if kind in ("mid", "on") and ref["id"] in s.entities:
-            s.add_constraint("midpoint" if kind == "mid" else "point_on", pid, ref["id"])
-        elif kind == "intersection":
+    if kind in ("model_point","model_edge"):
+        pid=model_ref(s,ref,[x,y])
+    else:
+        pid=s.add_point(x,y)
+        if kind in ("mid","on") and ref["id"] in s.entities:
+            s.add_constraint("midpoint" if kind=="mid" else "point_on",pid,ref["id"])
+        elif kind=="intersection":
             for eid in ref["ids"]:
                 if eid in s.entities:
-                    s.add_constraint("point_on", pid, eid)
-        elif kind == "quadrant" and ref["id"] in s.entities:
-            eid = ref["id"]
-            s.add_constraint("point_on", pid, eid)
-            s.add_constraint(ref["axis"], s.entities[eid]["c"], pid)
-        elif kind == "align" and ref["id"] in s.points:
-            s.add_constraint(ref["axis"], ref["id"], pid)
+                    s.add_constraint("point_on",pid,eid)
+        elif kind=="quadrant" and ref["id"] in s.entities:
+            eid=ref["id"]
+            s.add_constraint("point_on",pid,eid)
+            s.add_constraint(ref["axis"],s.entities[eid]["c"],pid)
+        elif kind=="rect_center":
+            a,b=ref["diagonal"]
+            if a not in s.points or b not in s.points:
+                raise ValueError("Unknown rectangle")
+            diag=next((i for i,e in s.entities.items() if e["type"]=="line" and e.get("helper") and {e["p1"],e["p2"]}=={a,b}),None)
+            if diag is None:
+                diag=s.add_line(a,b,True)
+                s.entities[diag]["helper"]=True
+            s.add_constraint("midpoint",pid,diag)
+        elif kind=="align" and ref["id"] in s.points:
+            s.add_constraint(ref["axis"],ref["id"],pid)
+    for guide in p.get("alignments",[])[:2]:
+        axis=guide["axis"]
+        if axis not in ("horizontal","vertical"):
+            raise ValueError("Invalid guide")
+        src=guide["source"]
+        r=src.get("ref",{})
+        if r.get("kind")=="point":
+            q=r.get("id")
+            if q not in s.points:
+                continue
+        else:
+            q=None
+            if r.get("kind")=="mid":
+                q=next((c["refs"][0] for c in s.constraints if c["type"]=="midpoint" and c["refs"][1]==r["id"]),None)
+            if q is None:
+                q=point_at(s,{"uv":src["uv"],"ref":r})
+                s.add_point_entity(q)
+        if q!=pid:
+            s.add_constraint(axis,q,pid)
     return pid
 
 
@@ -412,6 +527,17 @@ def sketch_edit(req):
                     s.add_constraint("horizontal", eid)
                 elif not ps[1].get("free") and abs(s.points[a][0]-s.points[b][0]) < 1e-8:
                     s.add_constraint("vertical", eid)
+                rel=ps[1].get("relation")
+                if rel:
+                    target=rel["id"]
+                    kind=rel["kind"]
+                    target_type=s.entities.get(target,{}).get("type")
+                    if kind in ("parallel","perpendicular","equal") and target_type=="line":
+                        s.add_constraint(kind,eid,target)
+                    elif kind=="tangent" and target_type in ("circle","arc"):
+                        s.add_constraint("tangent",eid,target)
+                    else:
+                        raise ValueError("Invalid inferred line relation")
             elif tool in ("rect", "center_rect"):
                 b = point_at(s, ps[1])
                 x,y = s.points[a]
@@ -437,7 +563,10 @@ def sketch_edit(req):
                     raise ValueError("Zero radius")
                 eid = s.add_circle(a,r,construction)
                 offers.append(("diameter", [eid], "Диаметр"))
-                if ps[1].get("ref"):
+                rel=ps[1].get("relation")
+                if rel and rel["kind"]=="equal" and s.entities.get(rel["id"],{}).get("type") in ("circle","arc"):
+                    s.add_constraint("equal",eid,rel["id"])
+                elif ps[1].get("ref") or ps[1].get("alignments"):
                     rim = point_at(s,ps[1])
                     if rim != a:
                         s.add_constraint("point_on",rim,eid)

@@ -289,7 +289,7 @@ try {
  async function conCount(kind,n){await page.waitForFunction(([kind,n])=>document.querySelectorAll("#sk-constraints [data-constraint-type="+kind+"]").length===n&&document.body.dataset.status==="Готово",[kind,n]);await noError();}
  await page.locator('[data-tool="circle"]').click();
  await conAt(-25,0);await conAt(-19,0);await objects(1);
- await conAt(-7,0);await conAt(-3,0);await objects(2);
+ await conAt(-7,0,true);await conAt(-3,0,true);await objects(2);
  await page.locator('[data-tool="select"]').click();await conAt(-25,6);
  await page.locator('[data-constraint="fix"]').click();await conCount("fix",1);await conCount("radius",1);
  await page.locator('[data-constraint="equal"]').click();
@@ -343,6 +343,39 @@ try {
  const np=ns.points[nl.p1],nq=ns.points[nl.p2],no=ns.points[ne.c];
  assert(Math.abs((nq[0]-np[0])*(no[1]-np[1])-(nq[1]-np[1])*(no[0]-np[0]))/Math.hypot(nq[0]-np[0],nq[1]-np[1])<1e-6);
  console.log("PASS normal through the center of a fixed circle");
+ // Smart snapping: actual hover acquisition, guide constraint and virtual center.
+ await menuCommand("new");await volume(0);
+ await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});
+ async function hoverSnap(x,y,label){await page.mouse.move(...await screenPoint(x,y));await page.waitForFunction(label=>document.querySelector("#sketch-canvas").dataset.snap.includes(label),label);}
+ await page.locator('[data-tool="rect"]').click();await parityAt(-30,-15);await parityAt(-10,5);await objects(4);
+ await page.locator('[data-tool="point"]').click();
+ await hoverSnap(-20,-5,"Центр прямоугольника");await parityAt(-20,-5);await objects(6);
+ await conCount("midpoint",1);
+ await hoverSnap(-30, -15,"Точка");
+ await hoverSnap(-29.5,20,"Вертикаль");await parityAt(-29.5,20);await objects(7);
+ await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});
+ const snaps=JSON.parse((await save()).toString()).features[0].params.sketch;
+ assert(Object.values(snaps.entities).some(e=>e.helper&&e.construction));
+ assert(snaps.constraints.some(c=>c.type==="vertical"&&c.refs.length===2));
+ console.log("PASS rectangle center and persistent awakened point guide");
+ await menuCommand("new");await volume(0);
+ await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});
+ await page.locator('[data-tool="line"]').click();await parityAt(-30,-20);await parityAt(-10,-10);await objects(1);
+ await page.locator('[data-tool="line"]').click();
+ await hoverSnap(-20,-15,"Середина");
+ await parityAt(-25,5);
+ await hoverSnap(-5,15.5,"Параллельно");await parityAt(-5,15.5);await objects(2);await conCount("parallel",1);
+ await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});
+ console.log("PASS awakened parallel inference persists as native constraint");
+ await menuCommand("demo");await volume(12000);
+ await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});
+ await page.locator('[data-tool="point"]').click();
+ await hoverSnap(20,0,"Середина ребра модели");await parityAt(20,0);await objects(1);await conCount("fix",1);
+ await hoverSnap(10,30,"Ребро модели");await parityAt(10,30);await objects(3);await conCount("point_on",1);
+ await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});
+ const ms=JSON.parse((await save()).toString()).features.at(-1).params.sketch;
+ assert(Object.values(ms.entities).some(e=>e.model_snap&&e.helper&&e.construction));
+ console.log("PASS coplanar model midpoint and edge constraints");
  await menuCommand("offline");
  await page.waitForFunction(()=>document.body.dataset.offline==="ready"||document.querySelector("#errors").textContent.trim(),{},{timeout:240000});await noError();
  await context.setOffline(true);await page.reload();await ready();await volume(0);

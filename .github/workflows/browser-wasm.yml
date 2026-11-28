@@ -57,6 +57,6 @@ jobs:
         run: |
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           docker tag freeshape-web:test ghcr.io/mirivlad/freeshape-web:wasm-experiment
-          docker tag freeshape-web:test ghcr.io/mirivlad/freeshape-web:wasm-0.3.8
-          docker push ghcr.io/mirivlad/freeshape-web:wasm-0.3.8
+          docker tag freeshape-web:test ghcr.io/mirivlad/freeshape-web:wasm-0.3.9
+          docker push ghcr.io/mirivlad/freeshape-web:wasm-0.3.9
           docker push ghcr.io/mirivlad/freeshape-web:wasm-experiment

@@ -155,3 +155,20 @@ undo/redo, rejects invalid picks and rolls back unsatisfiable new constraints.
 Exact feasible point dragging uses a temporary constraint, with weighted
 fallback for constrained targets. No temporary constraint is persisted.
 Automatic inference and viewport dimension placement remain separate milestones.
+
+## 0.3.9 — smart snapping
+
+Hover over characteristic points to awaken up to eight alignment sources, or
+over curves to awaken direction/equal-size references. Horizontal and vertical
+guides can combine and intersect finite sketch/model edges. Virtual rectangle
+centres and midpoint/intersection sources become real constrained sketch
+geometry only on commit. Native solver applies inferred parallel,
+perpendicular, equal length/radius and tangent constraints. Model edges are
+cached from the state before the sketch, filtered to its plane; corners and
+midpoints are fixed references, straight/circular edges are fixed construction
+helpers reused within the sketch. Arbitrary model curves use a sampled fixed
+point, matching the desktop fallback. Shift disables snapping temporarily;
+the sketch panel also exposes snapping, characteristic points, guides and
+relations switches. Model references are static projections as in desktop,
+not associative external links. Automatic intersection with ellipses/splines
+and live constrained dragging remain outside this milestone.

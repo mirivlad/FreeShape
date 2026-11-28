@@ -291,6 +291,56 @@ class SketchTools(unittest.TestCase):
         self.assertLess(math.dist(r["draft"]["points"][mid],[-10,6]),1e-6)
         self.assertFalse(r["bad"])
 
+    def test_snap_rectangle_center_and_virtual_guides(self):
+        r=self.draw("rect",[(10,10),(30,30)])
+        rc=r["rectangle_centres"][0]
+        r=bridge.call({"op":"sketch_draw","tool":"point","points":[{"uv":rc["uv"],"ref":{"kind":"rect_center","diagonal":rc["diagonal"]}}]})
+        sk=bridge.draft["sketch"]
+        diag=next(i for i,e in sk.entities.items() if e.get("helper"))
+        center=next(c["refs"][0] for c in sk.constraints if c["type"]=="midpoint" and c["refs"][1]==diag)
+        self.assertAlmostEqual(sk.points[center][0],20,places=6)
+        side=next(i for i,e in sk.entities.items() if e["type"]=="line" and not e.get("helper"))
+        a,b=sk.entities[side]["p1"],sk.entities[side]["p2"]
+        mid=((sk.P(a)+sk.P(b))/2).tolist()
+        r=bridge.call({"op":"sketch_draw","tool":"point","points":[{"uv":[mid[0],40],"alignments":[{"axis":"vertical","source":{"uv":mid,"ref":{"kind":"mid","id":side}}}]}]})
+        self.assertFalse(r["bad"])
+        self.assertTrue(any(c["type"]=="midpoint" and c["refs"][1]==side for c in r["draft"]["constraints"]))
+        self.assertTrue(any(c["type"]=="vertical" and len(c["refs"])==2 for c in r["draft"]["constraints"]))
+        self.assertEqual(len(r["regions"]),1)
+
+    def test_snap_relations_persist(self):
+        r=self.draw("line",[(10,10),(20,20)])
+        line=next(iter(r["draft"]["entities"]))
+        for kind,uv in (("parallel",[50,50]),("perpendicular",[50,30]),("equal",[50,50])):
+            r=bridge.call({"op":"sketch_draw","tool":"line","points":[{"uv":[40,40]},{"uv":uv,"relation":{"kind":kind,"id":line}}]})
+            self.assertFalse(r["bad"])
+            self.assertTrue(any(c["type"]==kind and line in c["refs"] for c in r["draft"]["constraints"]))
+        r=self.draw("circle",[(0,0),(5,0)])
+        circle=next(i for i,e in r["draft"]["entities"].items() if e["type"]=="circle")
+        r=bridge.call({"op":"sketch_draw","tool":"circle","points":[{"uv":[20,0]},{"uv":[25,0],"relation":{"kind":"equal","id":circle}}]})
+        self.assertFalse(r["bad"])
+        self.assertTrue(any(c["type"]=="equal" and circle in c["refs"] for c in r["draft"]["constraints"]))
+        r=bridge.call({"op":"sketch_draw","tool":"line","points":[{"uv":[-10,5]},{"uv":[0,5],"ref":{"kind":"on","id":circle},"relation":{"kind":"tangent","id":circle}}]})
+        self.assertFalse(r["bad"])
+        self.assertTrue(any(c["type"]=="tangent" and circle in c["refs"] for c in r["draft"]["constraints"]))
+
+    def test_model_snap_only_coplanar_and_helper_reuse(self):
+        bridge.call({"op":"demo"})
+        r=bridge.call({"op":"begin_sketch","plane":"Top"})
+        self.assertEqual(len(r["model_edges"]),4)
+        e=r["model_edges"][0]
+        self.assertEqual(e["kind"],"line")
+        mid=next(p["uv"] for p in e["points"] if "Середина" in p["label"])
+        r=bridge.call({"op":"sketch_draw","tool":"point","points":[{"uv":mid,"ref":{"kind":"model_edge","id":e["id"]}}]})
+        self.assertFalse(r["bad"])
+        self.assertEqual(len(r["draft"]["entities"]),2)
+        r=bridge.call({"op":"sketch_draw","tool":"point","points":[{"uv":mid,"ref":{"kind":"model_edge","id":e["id"]}}]})
+        self.assertEqual(sum(bool(x.get("model_snap")) for x in r["draft"]["entities"].values()),1)
+        self.assertEqual(len(r["regions"]),0)
+        bridge.call({"op":"sketch_cancel"})
+        r=bridge.call({"op":"begin_sketch","id":bridge.doc.features[0]["id"]})
+        self.assertFalse(r["model_edges"]) # future extrusion is not a reference
+
     def test_bad_inputs_roll_back(self):
         for tool, points, args in [
             ("ellipse", [(0, 0), (10, 0), (5, 0)], {}),
