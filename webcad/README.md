@@ -195,3 +195,18 @@ transaction, available immediately to subsequent dimensions, and undoable
 with the dimension. Cancel discards pending variables. Finishing the sketch
 inserts native typed Measure Value features before it, as one document undo
 step. Fixed variables remain editable in the existing variable menu.
+
+## 0.3.11 — existing body feature dialogs
+
+Extrude and revolve expose Solid, Surface and Thin, sketch regions across
+multiple sketches, model faces, sketch curves and edges, merge scope and
+separate bodies/colours. Extrude exposes blind/symmetric/through and up-to
+ends, offsets, independent second end and draft. Revolve exposes world,
+sketch-line and model-edge axes, full/one/two/symmetric and up-to ends.
+Fillet supports variable radius; chamfer supports equal/two/angle, flip and
+tangent propagation. Existing features can be reopened in their original
+history context and edited atomically; cancel restores the final model.
+All previews use the native kernel. Selection is available from the view
+and enumerated reference lists; the lists also expose planes and vertices.
+Desktop-specific draggable feature arrows, automatic operation/direction
+inference and exact chain-selection interaction are not included.

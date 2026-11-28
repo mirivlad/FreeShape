@@ -51,7 +51,8 @@ def state_meshes(state, hidden=()):
         meshes.append({"id": p.id, "name": p.name, "vertices": m.verts.ravel().tolist(),
                        "normals": m.normals.ravel().tolist(), "triangles": m.tris.ravel().tolist(),
                        "tri_face": m.tri_face.tolist(),
-                       "edges": [e.ravel().tolist() for e in m.edge_polys]})
+                       "edges": [e.ravel().tolist() for e in m.edge_polys],
+                       "points": [list(map(float,v)) for v in K.vertex_points(p.shape)], "color":list(p.color)})
     return meshes
 
 
@@ -70,7 +71,7 @@ def summary(d):
     meshes = state_meshes(d.state, d.hidden_parts)
     return {"name": d.name, "units": d.units, "parts": [{"id": p.id, "name": p.name} for p in d.state.parts.values()], "undo": d.can_undo(), "redo": d.can_redo(), "features": [{"id": f["id"], "name": f.get("name", f["type"]),
             "type": f["type"], "depth": f.get("params", {}).get("depth"),
-            "params": {k: v for k, v in f.get("params", {}).items() if k in ("depth", "radius", "distance", "op", "end", "flip", "angle", "name", "expr", "mtype", "unit", "aunit")},
+            "params": {k: v for k, v in f.get("params", {}).items() if k in ("depth", "radius", "distance", "op", "end", "flip", "angle", "name", "expr", "mtype", "unit", "aunit", "creation")},
             "regions": len(d.state.sketches[f["id"]].regions) if f["id"] in d.state.sketches else 0,
             "suppressed": f.get("suppressed", False)} for f in d.features],
             "errors": d.errors, "meshes": meshes,
@@ -921,58 +922,233 @@ def finish_sketch():
     draft = None
 
 
+SOLID_KINDS=("extrude","revolve","fillet","chamfer")
+
+
+def solid_base(req):
+    fid=req.get("id")
+    if fid:
+        f=doc.feature(fid)
+        if f["type"] not in SOLID_KINDS or f["type"]!=req.get("kind",f["type"]):
+            raise ValueError("Invalid operation to edit")
+        index=next(i for i,x in enumerate(doc.features) if x["id"]==fid)
+        return doc.state_before(index),index,f
+    return doc.state,doc.insert_index(),None
+
+
+def ref_for_pick(state,pick,kind):
+    part=state.parts[pick["part"]]
+    seq=K.faces(part.shape) if kind=="face" else K.edges(part.shape)
+    index=int(pick["index"])
+    if not 0<=index<len(seq):
+        raise ValueError("Invalid geometry selection")
+    return F.make_ref(part.id,seq[index],kind,part.shape)
+
+
+def target_ref(state,pick,end):
+    if not pick:raise ValueError("Select end target")
+    kind=pick["kind"]
+    if end=="up_to_face" and kind=="face":
+        return {"kind":"face","ref":ref_for_pick(state,pick,"face")}
+    if end=="up_to_face" and kind=="plane":
+        ref={"kind":"std","name":pick["name"]} if "name" in pick else {"kind":"plane","fid":pick["id"]}
+        F.resolve_plane(state,ref)
+        return {"kind":"plane","ref":ref}
+    if end=="up_to_part" and kind=="part" and pick["id"] in state.parts:
+        return {"kind":"part","id":pick["id"]}
+    if end=="up_to_vertex" and kind=="vertex":
+        part=state.parts[pick["part"]]
+        pts=K.vertex_points(part.shape);i=int(pick["index"])
+        if not 0<=i<len(pts):raise ValueError("Invalid vertex")
+        return {"kind":"vertex","ref":F.make_vertex_ref(part.id,pts[i],part.shape)}
+    if end=="up_to_vertex" and kind=="sketch_point":
+        sr=state.sketches[pick["sketch"]]
+        return {"kind":"vertex","ref":F.sketch_point_ref(sr,pick["sketch"],pick["point"])}
+    raise ValueError("Invalid end target")
+
+
+def solid_catalog(state):
+    result={"sketches":{},"parts":[],"planes":[]}
+    for fid,sr in state.sketches.items():
+        curves=[]
+        for eid,e in sr.sketch.entities.items():
+            if e.get("helper") or e["type"] in ("point","text","image"):continue
+            paths=[[list(map(float,sr.plane.to_world(*q))) for q in path] for path in sr.sketch.polylines(eid,64)]
+            curves.append({"id":eid,"type":e["type"],"construction":bool(e.get("construction")),"paths":paths})
+        result["sketches"][fid]={"curves":curves,"points":{i:list(map(float,sr.plane.to_world(*q))) for i,q in sr.sketch.points.items()},"regions":len(sr.regions),"region_edges":[len(K.edges(f)) for f in sr.regions]}
+    for p in state.parts.values():
+        result["parts"].append({"id":p.id,"name":p.name,
+             "faces":[{"index":i,"planar":K.planar_face_plane(f) is not None} for i,f in enumerate(K.faces(p.shape))],
+             "edges":[{"index":i,"axis":K.edge_line(e) is not None or "axis" in K.edge_info(e)} for i,e in enumerate(K.edges(p.shape))],
+             "vertices":len(K.vertex_points(p.shape))})
+    result["planes"]=list(state.planes)
+    return result
+
+
+def saved_solid_picks(state,p):
+    """Resolve saved native references against the model BEFORE the feature."""
+    def pick(ref,kind):
+        pid,shape=F.resolve(state,ref,kind)
+        seq=K.faces(state.parts[pid].shape) if kind=="face" else K.edges(state.parts[pid].shape)
+        return {"part":pid,"index":next(i for i,e in enumerate(seq) if e.IsSame(shape))}
+    def region(ref):
+        sr=state.sketches[ref["sketch"]]
+        face=F.resolve_regions(state,[ref])[0]
+        return {"sketch":ref["sketch"],"index":next(i for i,e in enumerate(sr.regions) if e.IsSame(face))}
+    def target(t):
+        if not t:return None
+        k=t["kind"]
+        if k=="part":return {"kind":k,"id":t["id"]}
+        r=t["ref"]
+        if k=="face":return {"kind":k,**pick(r,"face")}
+        if k=="plane":
+            if r["kind"]=="std":return {"kind":k,"name":r["name"]}
+            if r["kind"]=="plane":return {"kind":k,"id":r["fid"]}
+            if r["kind"]=="face":return {"kind":"face",**pick(r["face"],"face")}
+        if k=="vertex":
+            if r["kind"]=="sketch_point":return {"kind":"sketch_point","sketch":r["sketch"],"point":r["point"]}
+            q=F.resolve_point(state,r)
+            return {"kind":"vertex","part":r["part"],"index":min(range(len(K.vertex_points(state.parts[r["part"]].shape))),key=lambda i:math.dist(q,K.vertex_points(state.parts[r["part"]].shape)[i]))}
+        raise ValueError("Unsupported saved target")
+    curves=[]
+    for r in p.get("curves",[]):
+        if r["kind"]=="sketch_chain":
+            curves.append({"kind":"sketch_chain","sketch":r["sketch"],"entity":r["entity"],**({"only":r["only"]} if r.get("only") else {})})
+        elif r["kind"]=="edge":curves.append({"kind":"edge",**pick(r["edge"],"edge")})
+        elif r["kind"]=="outline":
+            curves.append({"kind":"outline_region",**region(r["ref"])} if r["of"]=="region" else {"kind":"outline_face",**pick(r["ref"],"face")})
+        elif r["kind"]=="region_edge":
+            rr=region(r["region"]);face=F.resolve_regions(state,[r["region"]])[0];edge=F.region_edge(state,r)
+            curves.append({"kind":"region_edge",**rr,"edge":next(i for i,e in enumerate(K.edges(face)) if e.IsSame(edge))})
+        else:raise ValueError("Unsupported saved curve")
+    axis=p.get("axis") or {"kind":"std","name":"Z"}
+    if axis["kind"]=="edge":axis={"kind":"edge",**pick(axis["edge"],"edge")}
+    return {"profiles":[region(r) for r in p.get("regions",[])],"faces":[pick(r,"face") for r in p.get("faces",[])],
+            "curves":curves,"edges":[pick(r,"edge") for r in p.get("edges",[])],
+            "scope":p.get("scope") or [],"axis":axis,"target":target(p.get("up_to")),"target2":target(p.get("up_to2"))}
+
+
+def solid_context(req):
+    state,index,f=solid_base(req)
+    result={"catalog":solid_catalog(state)}
+    if f:
+        # Preserve the document, including the final history, while editing its earlier operation.
+        result.update(params=copy.deepcopy(f["params"]),picks=saved_solid_picks(state,f["params"]),
+                      meshes=state_meshes(state,doc.hidden_parts),
+                      sketch_regions={fid:sketch_regions_view(sr) for fid,sr in state.sketches.items()})
+    return result
+
+
 def build_solid(req):
-    kind = req["kind"]
-    if kind not in ("extrude","revolve","fillet","chamfer"):
-        raise ValueError("Unsupported feature")
-    f = doc.make_feature(kind)
-    p = f["params"]
+    kind=req["kind"]
+    if kind not in SOLID_KINDS:raise ValueError("Unsupported feature")
+    state,index,old=solid_base(req)
+    f=copy.deepcopy(old) if old else doc.make_feature(kind,state)
+    p=f["params"]
+    def choice(key,options,default):
+        v=req.get(key,default)
+        if v not in options:raise ValueError("Invalid "+key)
+        return v
+    def val(key,default,minval=None,angle=False):
+        raw=req.get(key,default)
+        n=parse_number(raw,angle=angle,variables=state.vars)
+        if n is None:raise ValueError("Invalid "+key)
+        return number(n,minval)
+    def region(pick):
+        sr=state.sketches[pick["sketch"]];i=int(pick["index"])
+        if not 0<=i<len(sr.regions):raise ValueError("Invalid sketch region")
+        return F.region_ref(sr,pick["sketch"],sr.regions[i])
     if kind in ("extrude","revolve"):
-        fid = req["sketch"]
-        sr = doc.state.sketches[fid]
-        indexes = list(dict.fromkeys(int(i) for i in req["regions"]))
-        if not indexes or any(i<0 or i>=len(sr.regions) for i in indexes):
-            raise ValueError("Select sketch regions")
-        op = req.get("operation","new")
-        if op not in ("new","add","remove","intersect"):
-            raise ValueError("Invalid operation")
-        p.update(regions=[F.region_ref(sr,fid,sr.regions[i]) for i in indexes],op=op,flip=bool(req.get("flip")))
-        if kind == "extrude":
-            p.update(depth=number(req["value"],1e-8),end="blind")
+        creation=choice("creation",("solid","surface","thin"),"solid")
+        profiles=req.get("profiles",[{"sketch":req.get("sketch"),"index":i} for i in req.get("regions",[])])
+        p.update(creation=creation,regions=[region(r) for r in profiles],
+                 faces=[ref_for_pick(state,r,"face") for r in req.get("faces",[])],curves=[])
+        for r in req.get("curves",[]) if creation!="solid" else []:
+            k=r["kind"]
+            if k=="sketch_chain":
+                sr=state.sketches[r["sketch"]];e=sr.sketch.entities[r["entity"]]
+                if e["type"] in ("point","text","image") or e.get("helper"):raise ValueError("Invalid sketch curve")
+                ref={"kind":k,"sketch":r["sketch"],"entity":r["entity"]}
+                if r.get("only"):
+                    if any(x not in sr.sketch.entities for x in r["only"]):raise ValueError("Unknown curve")
+                    ref["only"]=list(r["only"])
+            elif k=="edge":ref={"kind":k,"edge":ref_for_pick(state,r,"edge")}
+            elif k=="outline_region":ref={"kind":"outline","of":"region","ref":region(r)}
+            elif k=="outline_face":ref={"kind":"outline","of":"face","ref":ref_for_pick(state,r,"face")}
+            elif k=="region_edge":
+                rr=region(r);face=F.resolve_regions(state,[rr])[0];i=int(r["edge"]);es=K.edges(face)
+                if not 0<=i<len(es):raise ValueError("Invalid region edge")
+                ref={"kind":k,"region":rr,"c":K.edge_info(es[i])["c"]}
+            else:raise ValueError("Invalid profile curve")
+            if ref not in p["curves"]:p["curves"].append(ref)
+        if not (p["regions"] or p["faces"] or p["curves"]):raise ValueError("Select profiles")
+        p.update(op=choice("operation",("new","add","remove","intersect"),"new"),
+                 surface_op=choice("surface_op",("new","add"),"new"),flip=bool(req.get("flip")),
+                 thickness=val("thickness",2,1e-8),thickness2=val("thickness2",1,0),
+                 thin_side=choice("thin_side",("mid","one","other","two"),"mid"))
+        p["separate"]=bool(req.get("separate")) and creation=="solid" and p["op"]=="new"
+        p["separate_colors"]=bool(req.get("separate_colors")) and p["separate"]
+        p["scope"]=list(dict.fromkeys(req.get("scope",[])))
+        if any(x not in state.parts for x in p["scope"]):raise ValueError("Invalid merge scope")
+        if kind=="extrude":
+            end=choice("end",("blind","symmetric","through")+F.UP_TO,"blind")
+            second=bool(req.get("second")) and end not in ("symmetric","through")
+            end2=choice("end2",("blind","symmetric","through")+F.UP_TO,"blind")
+            p.update(end=end,depth=val("value",25,1e-8),second=second,end2=end2,
+                     depth2=val("depth2",10,1e-8),both=bool(req.get("both")),
+                     draft=bool(req.get("draft")),draft_angle=val("draft_angle",3,angle=True),
+                     draft2=bool(req.get("draft2")),draft_angle2=val("draft_angle2",3,angle=True))
         else:
-            axis = req.get("axis","Z")
-            if axis not in ("X","Y","Z"):
-                raise ValueError("Invalid axis")
-            angle = number(req["value"],1e-8)
-            if angle>360:
-                raise ValueError("Angle exceeds 360 degrees")
-            p.update(axis={"kind":"std","name":axis},end="full" if angle==360 else "blind",angle=angle)
+            raw=req.get("axis","Z")
+            axis={"kind":"std","name":raw} if isinstance(raw,str) else dict(raw)
+            if axis.get("kind")=="edge":axis={"kind":"edge","edge":ref_for_pick(state,axis,"edge")}
+            elif axis.get("kind")=="sketch_line":
+                e=state.sketches[axis["sketch"]].sketch.entities[axis["line"]]
+                if e["type"]!="line":raise ValueError("Select a straight sketch line")
+            elif axis.get("kind")!="std" or axis.get("name") not in ("X","Y","Z"):raise ValueError("Invalid axis")
+            F.resolve_axis(state,axis)
+            angle=val("value",360,1e-8,True)
+            end=choice("end",("full","one","blind","symmetric","two")+F.UP_TO,"full" if angle==360 else "one")
+            angle2=val("angle2",90,1e-8,True)
+            if angle>360 or angle2>360 or (end=="two" and angle+angle2>360):raise ValueError("Invalid rotation angle")
+            p.update(axis=axis,end="one" if end=="blind" else end,angle=angle,angle2=angle2,mirror_end=bool(req.get("mirror_end")))
+        for suffix,active in (("",True),("2",kind=="extrude" and p.get("second"))):
+            e=p.get("end"+suffix)
+            p["up_to"+suffix]=target_ref(state,req.get("target"+suffix),e) if active and e in F.UP_TO and e!="up_to_next" else None
+            p["offset"+suffix]=val("offset"+suffix,0) if active and e in ("up_to_face","up_to_vertex") else 0
     else:
-        picks = req.get("edges",[])
-        if not picks:
-            raise ValueError("Select model edges")
-        p["edges"] = [subref(item,"edge")[2] for item in picks]
-        p["radius" if kind=="fillet" else "distance"] = number(req["value"],1e-8)
+        picks=list(req.get("edges",[]))
+        for r in req.get("edge_faces",[]):
+            part=state.parts[r["part"]];faces=K.faces(part.shape);i=int(r["index"])
+            if not 0<=i<len(faces):raise ValueError("Invalid face")
+            es=K.edges(part.shape)
+            picks.extend({"part":part.id,"index":j} for j,e in enumerate(es) if any(e.IsSame(x) for x in K.edges(faces[i])))
+        picks=list({(p["part"],p["index"]):p for p in picks}.values())
+        if not picks:raise ValueError("Select model edges or faces")
+        p["edges"]=[ref_for_pick(state,item,"edge") for item in picks]
+        if kind=="fillet":p.update(radius=val("value",2,1e-8),variable=bool(req.get("variable")),radius2=val("radius2",1,1e-8))
+        else:
+            p.update(type=choice("chamfer_type",("equal","two","angle"),"equal"),distance=val("value",1,1e-8),
+                     distance2=val("distance2",2,1e-8),angle=val("chamfer_angle",45,1e-8,True),
+                     tangent=bool(req.get("tangent",True)),flip=bool(req.get("flip")))
     return f
 
 
 def preview_solid(req):
-    # A preview must not consume persistent IDs or create undo history.
-    counter = doc._counter
+    counter=doc._counter
     try:
-        f = build_solid(req)
-        state, error = doc.preview(f, doc.insert_index())
-        if error:
-            raise ValueError(str(error))
-        return {"meshes": state_meshes(state, doc.hidden_parts),
-                "volume": sum(float(K.volume(p.shape)) for p in state.parts.values())}
-    finally:
-        doc._counter = counter
+        _,index,_=solid_base(req)
+        f=build_solid(req)
+        state,error=doc.preview(f,index)
+        if error:raise ValueError(str(error))
+        return {"meshes":state_meshes(state,doc.hidden_parts),"volume":sum(float(K.volume(p.shape)) for p in state.parts.values()),
+                "area":sum(K.face_info(face)["area"] for p in state.parts.values() for face in K.faces(p.shape))}
+    finally:doc._counter=counter
 
 
 def add_solid(req):
-    f = build_solid(req)
-    transaction(lambda: doc.add_feature(f))
+    f=build_solid(req)
+    transaction(lambda:doc.replace_feature(f) if req.get("id") else doc.add_feature(f))
 
 
 def call(request):
@@ -1034,6 +1210,8 @@ def call(request):
         finish_sketch()
     elif op == "sketch_cancel":
         draft = None
+    elif op == "solid_context":
+        return solid_context(request)
     elif op == "solid_preview":
         return preview_solid(request)
     elif op == "solid":
