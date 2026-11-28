@@ -153,7 +153,7 @@ $("solid-dialog").addEventListener("change",()=>{drawRegions();schedulePreview()
 $("solid-cancel").onclick=closeSolid;
 $("solid-dialog").onsubmit=async e=>{e.preventDefault();const args=solidArgs();clearPreview();const r=await run("solid",args,true);if(r)closeSolid();else schedulePreview();};
 $("variable").onclick=()=>{
- const f=selectedFeature(),existing=f?.type==="variable"?f:null;
+ const f=selectedFeature(),existing=(f?.type==="variable"||(f?.type==="measure_value"&&["fixed_length","fixed_angle","fixed_number","expression"].includes(f.params?.mtype)))?f:null;
  const name=prompt("Имя переменной (без #)",existing?.params?.name||"");if(!name?.trim())return;
  const expr=prompt("Значение или выражение",existing?.params?.expr||"10");if(!expr?.trim())return;
  run("variable",{id:existing?.id,name:name.trim(),expr:expr.trim()});

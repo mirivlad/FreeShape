@@ -406,6 +406,77 @@ class SketchTools(unittest.TestCase):
         e=sk.entities[eid]
         self.assertAlmostEqual(math.dist(sk.P(e["p1"]),sk.P(e["p2"])),35,places=6)
 
+    def test_inline_variable_is_atomic_with_dimension_and_document(self):
+        r=self.draw("line",[(10,10),(30,10)])
+        eid=next(iter(r["draft"]["entities"]))
+        before=bridge.draft["sketch"].to_dict()
+        req={"op":"sketch_offer_dimension","kind":"distance","refs":[eid],"value":"#width + 5 mm",
+             "new_variable":{"name":"width","expr":"20"}}
+        r=bridge.call(req)
+        self.assertEqual(r["variables"]["width"],20)
+        self.assertEqual(r["variable_kinds"]["width"],"length")
+        self.assertEqual(r["draft"]["constraints"][-1]["value"],25)
+        self.assertFalse(bridge.doc.features)
+        r=bridge.call({"op":"sketch_undo"})
+        self.assertEqual(r["draft"],before)
+        self.assertNotIn("width",r["variables"])
+        self.assertFalse(r["pending_variables"])
+        r=bridge.call({"op":"sketch_redo"})
+        self.assertEqual(r["variables"]["width"],20)
+        self.assertEqual(len(r["pending_variables"]),1)
+        bridge.call({"op":"sketch_finish"})
+        v,f=bridge.doc.features
+        self.assertEqual(v["type"],"measure_value")
+        self.assertEqual(v["params"]["mtype"],"fixed_length")
+        self.assertEqual(f["params"]["sketch"]["constraints"][-1]["expr"],"#width + 5 mm")
+        self.assertEqual(len(bridge.doc._undo),1)
+        bridge.call({"op":"undo"})
+        self.assertFalse(bridge.doc.features)
+        bridge.call({"op":"redo"})
+        bridge.call({"op":"variable","id":v["id"],"name":"width","expr":"30"})
+        r=bridge.call({"op":"begin_sketch","id":f["id"]})
+        self.assertEqual(r["draft"]["constraints"][-1]["value"],35)
+
+    def test_inline_variable_rejects_invalid_and_cancel_discards(self):
+        r=self.draw("line",[(10,10),(30,10)])
+        eid=next(iter(r["draft"]["entities"]))
+        before=bridge.sketch_snapshot()
+        req={"op":"sketch_offer_dimension","kind":"distance","refs":[eid],"value":"#width"}
+        for new in ({"name":"wrong","expr":"20"},{"name":"width","expr":"invalid"},{"name":"width","expr":"-1"},{"name":"width","expr":"30 deg"}):
+            with self.subTest(new=new):
+                with self.assertRaises((ValueError,bridge.K.KernelError)):
+                    bridge.call({**req,"new_variable":new})
+                self.assertEqual(bridge.sketch_snapshot(),before)
+                self.assertEqual(len(bridge.draft["undo"]),1)
+        r=bridge.call({**req,"new_variable":{"name":"width","expr":"20"}})
+        self.assertEqual(r["variables"]["width"],20)
+        bridge.call({"op":"sketch_cancel"})
+        self.assertFalse(bridge.doc.features)
+        self.assertFalse(bridge.doc._undo)
+
+    def test_inline_angle_variable_insert_before_existing_sketch(self):
+        r=self.draw("line",[(10,10),(30,10)])
+        a=next(iter(r["draft"]["entities"]))
+        b=next(i for i in self.draw("line",[(40,10),(50,20)])["draft"]["entities"] if i!=a)
+        r=bridge.call({"op":"sketch_constraint","kind":"angle","refs":[a,b],"value":45})
+        cid=r["draft"]["constraints"][-1]["id"]
+        bridge.call({"op":"sketch_finish"})
+        fid=bridge.doc.features[0]["id"]
+        bridge.call({"op":"variable","name":"later","expr":"8"})
+        later=bridge.doc.features[-1]["id"]
+        r=bridge.call({"op":"begin_sketch","id":fid})
+        self.assertNotIn("later",r["variables"])
+        r=bridge.call({"op":"sketch_dimension","id":cid,"value":"#turn","new_variable":{"name":"turn","expr":"60 deg"}})
+        self.assertEqual(r["variables"]["turn"],60)
+        self.assertEqual(r["variable_kinds"]["turn"],"angle")
+        bridge.call({"op":"sketch_finish"})
+        self.assertEqual(bridge.doc.features[0]["params"]["mtype"],"fixed_angle")
+        self.assertEqual([f["id"] for f in bridge.doc.features[1:]],[fid,later])
+        bridge.call({"op":"undo"})
+        self.assertEqual([f["id"] for f in bridge.doc.features],[fid,later])
+        bridge.call({"op":"redo"})
+        self.assertEqual(bridge.doc.state.vars["turn"],60)
+
     def test_bad_inputs_roll_back(self):
         for tool, points, args in [
             ("ellipse", [(0, 0), (10, 0), (5, 0)], {}),

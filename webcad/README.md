@@ -183,5 +183,15 @@ is one undo step. Dimension labels can be dragged to persisted sketch positions
 or clicked to edit. Angle and point-to-line dimensions, an automatic dimension
 tool (D), numeric expressions and named document variables are supported.
 Create or edit a variable in the Tools menu before editing a sketch; expressions
-such as #width + 5 mm remain native and re-evaluate on rebuild. Inline creation
-of unknown variables and full desktop dimension interaction are not implemented.
+such as #width + 5 mm remain native and re-evaluate on rebuild. Full desktop dimension interaction is not yet implemented.
+
+## 0.3.10.1 — inline variables
+
+All sketch dimension fields complete existing variables, including partial
+tokens within expressions. Use arrows and Enter/Tab or click a suggestion.
+Entering one unknown #name offers to create a length or angle variable with
+the current dimension as the default value. Creation is staged in the sketch
+transaction, available immediately to subsequent dimensions, and undoable
+with the dimension. Cancel discards pending variables. Finishing the sketch
+inserts native typed Measure Value features before it, as one document undo
+step. Fixed variables remain editable in the existing variable menu.

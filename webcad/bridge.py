@@ -4,6 +4,7 @@ import copy
 import json
 import math
 import pathlib
+import re
 import sys
 import time
 import traceback
@@ -13,7 +14,8 @@ from freeshape.document import Document
 from freeshape.sketch import Sketch
 from freeshape import sketch_ops as OPS
 from freeshape.ui import smart_snap as SS
-from freeshape.expr import parse_number, has_vars
+from freeshape.expr import parse_number, has_vars, var_names
+from freeshape import measure_value as MV
 
 doc = None
 draft = None
@@ -68,7 +70,7 @@ def summary(d):
     meshes = state_meshes(d.state, d.hidden_parts)
     return {"name": d.name, "units": d.units, "parts": [{"id": p.id, "name": p.name} for p in d.state.parts.values()], "undo": d.can_undo(), "redo": d.can_redo(), "features": [{"id": f["id"], "name": f.get("name", f["type"]),
             "type": f["type"], "depth": f.get("params", {}).get("depth"),
-            "params": {k: v for k, v in f.get("params", {}).items() if k in ("depth", "radius", "distance", "op", "end", "flip", "angle", "name", "expr")},
+            "params": {k: v for k, v in f.get("params", {}).items() if k in ("depth", "radius", "distance", "op", "end", "flip", "angle", "name", "expr", "mtype", "unit", "aunit")},
             "regions": len(d.state.sketches[f["id"]].regions) if f["id"] in d.state.sketches else 0,
             "suppressed": f.get("suppressed", False)} for f in d.features],
             "errors": d.errors, "meshes": meshes,
@@ -130,7 +132,8 @@ def sketch_view():
             "undo": bool(draft["undo"]), "redo": bool(draft["redo"]),
             "rectangle_centres": [{"uv": q.tolist(), "diagonal": list(ab), "ids": list(ids)}
                                   for q, ab, ids in SS.rectangle_centres(s)],
-            "model_edges": draft["model_edges"], "variables": draft["variables"]}
+            "model_edges": draft["model_edges"], "variables": dict(draft["variables"]),
+            "variable_kinds": dict(draft["variable_kinds"]), "pending_variables": copy.deepcopy(draft["pending_variables"])}
 
 
 def model_snap_geometry(state, plane, hidden=()):
@@ -199,11 +202,19 @@ def begin_sketch(req):
                 raise ValueError("Unknown sketch plane")
             plane = {"kind": "std", "name": name}
         s = Sketch()
-    s.solve()
     index = next(i for i,f in enumerate(doc.features) if f["id"]==fid) if fid else doc.insert_index()
     state = doc.state_before(index)
+    if fid:
+        # Evaluate the sketch against variables visible before it, including updates
+        # made since the sketch was last saved.
+        for c in s.constraints:
+            if isinstance(c.get("expr"),str):
+                value=parse_number(c["expr"],angle=c["type"]=="angle",variables=state.vars)
+                if value is None:raise ValueError("Unresolved dimension: "+c["expr"])
+                c["value"]=value
+    s.solve()
     model_edges = model_snap_geometry(state, F.resolve_plane(state,plane), doc.hidden_parts)
-    draft = {"id": fid, "plane": plane, "sketch": s, "undo": [], "redo": [], "model_edges": model_edges, "variables": dict(state.vars)}
+    draft = {"id": fid, "plane": plane, "sketch": s, "undo": [], "redo": [], "model_edges": model_edges, "variables": dict(state.vars), "variable_kinds": dict(state.var_kinds), "pending_variables": [], "index": index}
     return sketch_view()
 
 
@@ -623,15 +634,55 @@ def set_dimension(s, kind, refs, value, pos=None):
     return c
 
 
+def sketch_snapshot():
+    return {"sketch":draft["sketch"].to_dict(),"variables":dict(draft["variables"]),
+            "variable_kinds":dict(draft["variable_kinds"]),"pending_variables":copy.deepcopy(draft["pending_variables"])}
+
+
+def restore_sketch_snapshot(snapshot):
+    draft["sketch"]=Sketch.from_dict(snapshot["sketch"])
+    for key in ("variables","variable_kinds","pending_variables"):
+        draft[key]=copy.deepcopy(snapshot[key])
+    draft["sketch"].solve()
+
+
+def stage_variable(req):
+    """Only allow creating the single unknown name used by this dimension.
+    The variable is part of the sketch transaction, not a separate document edit."""
+    new=req.get("new_variable")
+    if new is None:return
+    if req["op"] not in ("sketch_constraint","sketch_dimension","sketch_offer_dimension"):
+        raise ValueError("Variables can only be created from a dimension")
+    name=str(new.get("name",""))
+    expr=str(new.get("expr","")).strip()
+    missing=set(var_names(req.get("value")))-draft["variables"].keys()
+    if missing!={name} or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}",name) or len(expr)>256:
+        raise ValueError("Expected exactly one new variable in the dimension")
+    kind=req.get("kind")
+    if req["op"]=="sketch_dimension":
+        kind=next(c["type"] for c in draft["sketch"].constraints if c["id"]==req["id"])
+    if kind not in ("distance","hdistance","vdistance","radius","diameter","angle"):
+        raise ValueError("Select a length or angle dimension")
+    mtype="fixed_angle" if kind=="angle" else "fixed_length"
+    params=dict(MV.DEFAULTS,name=name,mtype=mtype,expr=expr,unit="mm",aunit="deg",entities=[])
+    state=F.ModelState(vars=dict(draft["variables"]),var_kinds=dict(draft["variable_kinds"]))
+    value,vkind=MV.fixed_value(state,params)
+    number(value)
+    draft["variables"][name]=value
+    draft["variable_kinds"][name]=vkind
+    draft["pending_variables"].append(params)
+
+
 def sketch_edit(req):
     s = draft["sketch"]
-    before = s.to_dict()
+    before = sketch_snapshot()
     old_bad = set(s.status.get("bad", []))
     weights = None
     offers = []
     chain_end = None
     try:
         op = req["op"]
+        stage_variable(req)
         if op == "sketch_draw":
             tool = req["tool"]
             ps = req["points"]
@@ -818,10 +869,9 @@ def sketch_edit(req):
         # render a new entity, the sketch and its history must stay unchanged.
         result = sketch_view()
     except Exception:
-        draft["sketch"] = Sketch.from_dict(before)
-        draft["sketch"].solve()
+        restore_sketch_snapshot(before)
         raise
-    if s.to_dict() == before:
+    if sketch_snapshot() == before:
         return result
     draft["undo"].append(before)
     del draft["undo"][:-100]
@@ -844,7 +894,30 @@ def finish_sketch():
         return
     f = copy.deepcopy(doc.feature(draft["id"])) if draft["id"] else doc.make_feature("sketch")
     f["params"].update(plane=draft["plane"],sketch=s.to_dict())
-    transaction(lambda: doc.replace_feature(f) if draft["id"] else doc.add_feature(f))
+    if draft["pending_variables"]:
+        def commit():
+            index=draft["index"]
+            feats=[]
+            for params in draft["pending_variables"]:
+                v=doc.make_feature("measure_value")
+                v["params"].update(copy.deepcopy(params))
+                v["name"]="#"+params["name"]
+                feats.append(v)
+            doc.checkpoint()
+            doc.features[index:index]=feats
+            index+=len(feats)
+            if draft["id"]:
+                doc.features[index]=f
+                if doc.rollback is not None and doc.rollback>=draft["index"]:
+                    doc.rollback+=len(feats)
+            else:
+                doc.features.insert(index,f)
+                if doc.rollback is not None:
+                    doc.rollback=index+1 if index+1<len(doc.features) else None
+            doc.rebuild()
+        transaction(commit)
+    else:
+        transaction(lambda: doc.replace_feature(f) if draft["id"] else doc.add_feature(f))
     draft = None
 
 
@@ -923,8 +996,8 @@ def call(request):
         if len(name)>64 or len(expr)>256:
             raise ValueError("Variable is too long")
         f=copy.deepcopy(doc.feature(request["id"])) if request.get("id") else doc.make_feature("variable")
-        if f["type"]!="variable":
-            raise ValueError("Select a variable")
+        if f["type"]!="variable" and not (f["type"]=="measure_value" and f["params"].get("mtype") in MV.FIXED):
+            raise ValueError("Select a fixed variable")
         f["params"].update(name=name,expr=expr)
         f["name"]="#"+name
         transaction(lambda: doc.replace_feature(f) if request.get("id") else doc.add_feature(f))
@@ -944,10 +1017,12 @@ def call(request):
     elif op in ("sketch_undo","sketch_redo"):
         source,target = ("undo","redo") if op=="sketch_undo" else ("redo","undo")
         if draft[source]:
-            draft[target].append(draft["sketch"].to_dict())
-            draft["sketch"] = Sketch.from_dict(draft[source].pop())
-            draft["sketch"].solve()
+            draft[target].append(sketch_snapshot())
+            restore_sketch_snapshot(draft[source].pop())
         return sketch_view()
+    elif op == "sketch_dimension_probe":
+        c=set_dimension(draft["sketch"].copy(),request["kind"],request["refs"],None,request.get("pos"))
+        return {"kind":c["type"],"value":c["value"]}
     elif op == "sketch_drag_preview":
         return drag_preview(request)
     elif op == "sketch_spline_preview":
