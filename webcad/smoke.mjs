@@ -159,6 +159,41 @@ try {
  const finalVolume=Number(await page.locator("body").getAttribute("data-volume"));
  assert(Math.abs(finalVolume-4000)<100||Math.abs(finalVolume-1000)<100,"only one profile is extruded");
  console.log("PASS centre rectangle helper and selective multi-region extrusion");
+ // Extended tools: actual clicks, native entities, and independently closed profiles.
+ for(const tool of ["ellipse","polygon","polygon_out","spline"]){
+  await menuCommand("new");await volume(0);
+  await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});
+  await page.locator('[data-tool="'+tool+'"]').click();
+  const canvas=await page.locator("#sketch-canvas").boundingBox(),u=Math.min(canvas.width,canvas.height)/100;
+  const o=[canvas.x+canvas.width/2,canvas.y+canvas.height/2];
+  async function at(x,y){await page.mouse.click(o[0]+x*u,o[1]-y*u);}
+  if(tool==="ellipse"){await at(0,0);await at(-20,0);await at(0,10);}
+  else if(tool==="spline"){
+   await page.locator("#sk-spline-closed").check();
+   await at(0,0);await at(-20,0);await at(-20,20);await at(0,20);
+   await page.locator("#sk-spline-done").click();
+  }else{
+   await page.locator("#sk-sides").fill("6");
+   await at(0,0);await at(-15,0);
+  }
+  const count=tool==="ellipse"?2:tool==="spline"?1:tool==="polygon"?7:8;
+  await page.waitForFunction(n=>document.querySelector("#sk-info").textContent.startsWith(n+" объектов"),count);
+  await page.locator("#sk-undo").click();
+  await page.waitForFunction(()=>document.querySelector("#sk-info").textContent.startsWith("0 объектов"));
+  await page.locator("#sk-redo").click();
+  await page.waitForFunction(n=>document.querySelector("#sk-info").textContent.startsWith(n+" объектов"),count);
+  await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});
+  await noError();assert.equal(await page.locator("body").getAttribute("data-regions"),"1",tool);
+  const shape=JSON.parse((await save()).toString()).features[0].params.sketch;
+  const entities=Object.values(shape.entities);
+  if(tool==="ellipse")assert(entities.some(e=>e.type==="ellipse"));
+  else if(tool==="spline")assert(entities.some(e=>e.type==="spline"&&e.closed&&e.pts.length===4));
+  else assert.equal(entities.filter(e=>e.type==="line").length,6);
+  await page.locator("#extrude").click();await page.waitForFunction(()=>Number(document.body.dataset.previewVolume)>0);
+  await page.locator("#solid-apply").click();
+  await page.waitForFunction(()=>Number(document.body.dataset.volume)>0);await noError();
+  console.log("PASS "+tool+" sketch, history and extrusion");
+ }
  await menuCommand("offline");
  await page.waitForFunction(()=>document.body.dataset.offline==="ready"||document.querySelector("#errors").textContent.trim(),{},{timeout:240000});await noError();
  await context.setOffline(true);await page.reload();await ready();await volume(0);

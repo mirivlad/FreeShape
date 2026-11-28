@@ -10,6 +10,7 @@ import traceback
 from freeshape import __version__, kernel as K, features as F
 from freeshape.document import Document
 from freeshape.sketch import Sketch
+from freeshape import sketch_ops as OPS
 
 doc = None
 draft = None
@@ -228,6 +229,38 @@ def sketch_edit(req):
                         s.add_constraint("point_on",rim,eid)
                         if not any(rim in s.entity_points(i) for i in s.entities):
                             s.add_point_entity(rim)
+            elif tool == "ellipse":
+                b = point_at(s, ps[1])
+                x, y = s.points[a]
+                u, v = s.points[b]
+                dx, dy = u-x, v-y
+                major = math.hypot(dx, dy)
+                qx, qy = (number(v) for v in ps[2]["uv"])
+                minor = abs((-(qx-x)*dy+(qy-y)*dx)/major) if major > 1e-8 else 0
+                if minor < 1e-8:
+                    raise ValueError("Ellipse needs two non-zero axes")
+                eid = s.add_ellipse(a, b, minor, construction)
+                s.add_line(a, b, True)
+            elif tool in ("polygon", "polygon_out"):
+                sides = number(req.get("sides", 6))
+                if not sides.is_integer() or not 3 <= sides <= 64:
+                    raise ValueError("Polygon needs 3 to 64 sides")
+                sides = int(sides)
+                x, y = s.points[a]
+                u, v = (number(v) for v in ps[1]["uv"])
+                d = (u-x, v-y)
+                size = math.hypot(*d)
+                inscribed = tool == "polygon"
+                angle, level = OPS.polygon_angle(d, sides, inscribed)
+                OPS.polygon(s, (x,y), angle, size, sides, inscribed, construction, a, level)
+            elif tool == "spline":
+                ids = [a] + [point_at(s, p) for p in ps[1:]]
+                closed = bool(req.get("closed"))
+                if len(ids) < (3 if closed else 2) or len(ids) > 128:
+                    raise ValueError("Invalid number of spline points")
+                if len(set(ids)) != len(ids) or any(math.dist(s.points[p],s.points[q]) < 1e-8 for i,p in enumerate(ids) for q in ids[i+1:]):
+                    raise ValueError("Spline needs distinct points")
+                s.add_spline(ids, closed, construction)
             elif tool == "arc":
                 # Three points on the arc: start, through, end.
                 p,q,r = [item["uv"] for item in ps]
@@ -282,7 +315,7 @@ def sketch_edit(req):
                 if len(refs)!=2:
                     raise ValueError("Select one point and one curve")
                 p,e=refs if refs[0] in s.points else refs[::-1]
-                if p not in s.points or ents.get(e,{}).get("type") not in (("line","arc") if kind=="midpoint" else ("line","circle","arc")):
+                if p not in s.points or ents.get(e,{}).get("type") not in (("line","arc") if kind=="midpoint" else ("line","circle","arc","ellipse","ellipse_arc")):
                     raise ValueError("Invalid point/curve selection")
                 s.add_constraint(kind,p,e)
             elif kind == "concentric":
@@ -299,8 +332,8 @@ def sketch_edit(req):
                     raise ValueError("Select one line or two points")
                 s.add_constraint(kind,*refs,value=number(req["value"],1e-8))
             elif kind in ("radius","diameter"):
-                if len(refs)!=1 or ents.get(refs[0],{}).get("type") not in ("circle","arc"):
-                    raise ValueError("Select a circle or arc")
+                if len(refs)!=1 or ents.get(refs[0],{}).get("type") not in ("circle","arc","ellipse","ellipse_arc"):
+                    raise ValueError("Select a circular or elliptical curve")
                 s.add_constraint(kind,*refs,value=number(req["value"],1e-8))
             else:
                 raise ValueError("Unsupported constraint")
