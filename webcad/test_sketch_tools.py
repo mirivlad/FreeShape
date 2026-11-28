@@ -55,6 +55,65 @@ class SketchTools(unittest.TestCase):
         bridge.call({"op": "sketch_finish"})
         self.assertFalse(bridge.doc.errors)
 
+    def modify(self, tool, eid, uv):
+        return bridge.call({"op": "sketch_modify", "tool": tool, "id": eid, "uv": uv})
+
+    def test_trim_between_intersections(self):
+        result = self.draw("line", [(0, 0), (30, 0)])
+        eid = next(iter(result["draft"]["entities"]))
+        self.draw("line", [(10, -5), (10, 5)])
+        self.draw("line", [(20, -5), (20, 5)])
+        result = self.modify("trim", eid, (15, 0))
+        ents, pts = result["draft"]["entities"], result["draft"]["points"]
+        self.assertEqual(len(ents), 4)
+        self.assertNotIn(eid, ents)
+        horizontal = sorted(tuple(sorted([pts[e["p1"]][0], pts[e["p2"]][0]]))
+                            for e in ents.values() if abs(pts[e["p1"]][1]-pts[e["p2"]][1]) < 1e-6)
+        self.assertEqual(horizontal, [(0, 10), (20, 30)])
+        self.assertEqual(sum(c["type"] == "point_on" for c in result["draft"]["constraints"]), 2)
+        self.assertEqual(len(bridge.call({"op": "sketch_undo"})["draft"]["entities"]), 3)
+        self.assertEqual(len(bridge.call({"op": "sketch_redo"})["draft"]["entities"]), 4)
+
+    def test_trim_line_against_circle(self):
+        result = self.draw("line", [(0, 0), (30, 0)])
+        eid = next(iter(result["draft"]["entities"]))
+        self.draw("circle", [(15, 0), (15, 5)])
+        result = self.modify("trim", eid, (15, 0))
+        pts = result["draft"]["points"]
+        intervals = sorted(tuple(sorted([pts[e["p1"]][0], pts[e["p2"]][0]]))
+                           for e in result["draft"]["entities"].values() if e["type"] == "line")
+        self.assertEqual(intervals, [(0, 10), (20, 30)])
+
+    def test_split_and_extend(self):
+        result = self.draw("line", [(0, 0), (10, 0)])
+        eid = next(iter(result["draft"]["entities"]))
+        result = self.modify("split", eid, (4, 0))
+        lines = list(result["draft"]["entities"].values())
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[0]["p2"], lines[1]["p1"])
+        result = bridge.call({"op": "sketch_undo"})
+        self.assertEqual(len(result["draft"]["entities"]), 1)
+        self.draw("line", [(20, -5), (20, 5)])
+        result = self.modify("extend", eid, (9, 0))
+        endpoint = result["draft"]["entities"][eid]["p2"]
+        self.assertAlmostEqual(result["draft"]["points"][endpoint][0], 20, places=6)
+        self.assertTrue(any(c["type"] == "point_on" for c in result["draft"]["constraints"]))
+
+    def test_modify_failures_preserve_history(self):
+        result = self.draw("line", [(0, 0), (10, 0)])
+        eid = next(iter(result["draft"]["entities"]))
+        before = bridge.draft["sketch"].to_dict()
+        for tool, point in [("split", (0, 0)), ("extend", (9, 0))]:
+            with self.assertRaises(ValueError):
+                self.modify(tool, eid, point)
+            self.assertEqual(bridge.draft["sketch"].to_dict(), before)
+            self.assertEqual(len(bridge.draft["undo"]), 1)
+        result = self.draw("circle", [(15, 15), (15, 20)])
+        circle = next(i for i,e in result["draft"]["entities"].items() if e["type"] == "circle")
+        with self.assertRaises(ValueError):
+            self.modify("trim", circle, (15, 20))
+        self.assertIn(circle, bridge.draft["sketch"].entities)
+
     def test_bad_inputs_roll_back(self):
         for tool, points, args in [
             ("ellipse", [(0, 0), (10, 0), (5, 0)], {}),

@@ -55,7 +55,7 @@ export class SketchEditor {
   $("sk-cancel").onclick=()=>this.end("sketch_cancel");
   window.addEventListener("keydown",e=>{
    if(!this.active||e.target.matches("input,textarea,select"))return;
-   const keys={KeyL:"line",KeyR:"rect",KeyC:"circle",KeyA:"arc",KeyP:"point",KeyE:"ellipse",KeyS:"spline",Escape:"select"};
+   const keys={KeyL:"line",KeyR:"rect",KeyC:"circle",KeyA:"arc",KeyP:"point",KeyE:"ellipse",KeyS:"spline",KeyM:"trim",KeyX:"extend",Escape:"select"};
    if(e.code==="Enter"&&this.tool==="spline"){e.preventDefault();this.finishSpline();}
    else if(e.ctrlKey&&e.code==="KeyZ"){e.preventDefault();this.change(e.shiftKey?"sketch_redo":"sketch_undo");}
    else if(e.ctrlKey&&e.code==="KeyY"){e.preventDefault();this.change("sketch_redo");}
@@ -75,9 +75,12 @@ export class SketchEditor {
  setTool(t){if(this.busy)return;this.tool=t;this.anchors=[];this.mouse=null;this.toolOptions();for(const b of document.querySelectorAll("[data-tool]"))b.classList.toggle("active",b.dataset.tool===t);this.draw();}
  toolOptions(){
   const polygon=["polygon","polygon_out"].includes(this.tool),spline=this.tool==="spline",ellipse=this.tool==="ellipse";
-  $("sk-tool-options").hidden=!(polygon||spline||ellipse);$("sk-polygon-options").hidden=!polygon;$("sk-spline-options").hidden=!spline;
-  $("sk-tool-help").textContent=ellipse?"Центр → конец оси → вторая полуось":spline?"Щёлкайте точки; Enter — завершить, Esc — отменить построение":polygon?(this.tool==="polygon"?"Центр → вершина":"Центр → середина стороны"):"";
+  const modify=this.modifying();
+  $("sk-tool-options").hidden=!(polygon||spline||ellipse||modify);$("sk-polygon-options").hidden=!polygon;$("sk-spline-options").hidden=!spline;
+  $("sk-tool-help").textContent=ellipse?"Центр → конец оси → вторая полуось":spline?"Щёлкайте точки; Enter — завершить, Esc — отменить построение":polygon?(this.tool==="polygon"?"Центр → вершина":"Центр → середина стороны"):({trim:"Щёлкните удаляемый участок отрезка между пересечениями",split:"Щёлкните точку разделения отрезка или дуги",extend:"Щёлкните ближе к концу, который нужно удлинить до следующей кривой"}[this.tool]||"");
  }
+ modifying(){return ["trim","split","extend"].includes(this.tool);}
+ modTarget(q){return this.pick(q,e=>!e.helper&&(e.type==="line"||(this.tool!=="trim"&&e.type==="arc")));}
  polygonSides(){const n=Number($("sk-sides").value);return Number.isInteger(n)&&n>=3&&n<=64?n:null;}
  finishSpline(){if(this.busy||this.tool!=="spline")return;const closed=$("sk-spline-closed").checked;if(this.anchors.length<(closed?3:2)){this.status("Недостаточно точек сплайна");return;}const points=this.anchors;this.anchors=[];this.change("sketch_draw",{tool:"spline",points,closed,construction:$("construction").checked});}
  curves(){const {points,entities}=this.state.draft,out=[];for(const [id,e] of Object.entries(entities)){
@@ -113,20 +116,21 @@ export class SketchEditor {
   return cands.sort((a,b)=>a.d-b.d)[0]||{uv:q};
  }
  pickPoint(q){let best=null;for(const [id,p] of Object.entries(this.state.draft.points)){const d=distance(q,p);if(d<7/this.scale&&(!best||d<best.d))best={id,d};}return best?.id;}
- pick(q){let best=null;for(const [id,paths] of Object.entries(this.state.curves)){for(const path of paths)for(let i=1;i<path.length;i++){const a=path[i-1],b=path[i],d=sub(b,a),p=add(a,d,Math.max(0,Math.min(1,dot(sub(q,a),d)/Math.max(dot(d,d),1e-20)))),dist=distance(p,q);if(dist<7/this.scale&&(!best||dist<best.dist))best={id,dist};}}
-  for(const [id,e] of Object.entries(this.state.draft.entities))if(e.type==="point"){const dist=distance(q,this.state.draft.points[e.p]);if(dist<7/this.scale&&(!best||dist<best.dist))best={id,dist};}return best?.id;}
+ pick(q,filter=()=>true){let best=null;for(const [id,paths] of Object.entries(this.state.curves)){if(!filter(this.state.draft.entities[id]))continue;for(const path of paths)for(let i=1;i<path.length;i++){const a=path[i-1],b=path[i],d=sub(b,a),p=add(a,d,Math.max(0,Math.min(1,dot(sub(q,a),d)/Math.max(dot(d,d),1e-20)))),dist=distance(p,q);if(dist<7/this.scale&&(!best||dist<best.dist))best={id,dist};}}
+  for(const [id,e] of Object.entries(this.state.draft.entities))if(e.type==="point"&&filter(e)){const dist=distance(q,this.state.draft.points[e.p]);if(dist<7/this.scale&&(!best||dist<best.dist))best={id,dist};}return best?.id;}
  down(e){if(!this.active)return;const p=this.eventPos(e);if(e.button===1||e.button===2){this.pan={p,center:[...this.center]};this.canvas.setPointerCapture(e.pointerId);e.preventDefault();return;}if(e.button!==0||this.busy)return;const q=this.uv(p);
   if(this.tool==="select"){const pid=this.pickPoint(q),id=pid||this.pick(q);if(!e.shiftKey)this.selection.clear();if(id){if(this.selection.has(id))this.selection.delete(id);else this.selection.add(id);}if(pid&&pid!=="origin"&&!e.shiftKey){this.drag={id:pid,start:p,uv:q,moved:false};this.canvas.setPointerCapture(e.pointerId);}this.updateInfo();this.draw();return;}
+  if(this.modifying()){const id=this.modTarget(q);if(id)this.change("sketch_modify",{tool:this.tool,id,uv:q});return;}
   const sides=this.polygonSides();if(["polygon","polygon_out"].includes(this.tool)&&sides===null){this.status("Число сторон: от 3 до 64");return;}
    const hit=this.snap(q,e.shiftKey);if(this.tool==="spline"&&this.anchors.some(a=>distance(a.uv,hit.uv)<1e-8)){this.status("Точки сплайна должны различаться");return;}
    this.anchors.push({uv:hit.uv,ref:hit.ref,free:e.shiftKey});if(this.tool==="spline"){if(this.anchors.length>=128)this.finishSpline();else this.draw();return;}
    const count=this.tool==="point"?1:["arc","ellipse"].includes(this.tool)?3:2;
    if(this.anchors.length===count){const tool=this.tool,points=this.anchors;this.anchors=[];this.change("sketch_draw",{tool,points,sides,construction:$("construction").checked});}else this.draw();
  }
- move(e){if(!this.active)return;const p=this.eventPos(e);if(this.pan){this.center=[this.pan.center[0]-(p[0]-this.pan.p[0])/this.scale,this.pan.center[1]+(p[1]-this.pan.p[1])/this.scale];this.draw();return;}if(this.drag){this.drag.moved ||= distance(p,this.drag.start)>4;this.drag.uv=this.uv(p);this.draw();return;}this.mouse=this.snap(this.uv(p),e.shiftKey);this.draw();}
+ move(e){if(!this.active)return;const p=this.eventPos(e);if(this.pan){this.center=[this.pan.center[0]-(p[0]-this.pan.p[0])/this.scale,this.pan.center[1]+(p[1]-this.pan.p[1])/this.scale];this.draw();return;}if(this.drag){this.drag.moved ||= distance(p,this.drag.start)>4;this.drag.uv=this.uv(p);this.draw();return;}const q=this.uv(p);this.mouse=this.modifying()?{uv:q,ref:{id:this.modTarget(q)}}:this.snap(q,e.shiftKey);this.draw();}
  up(e){this.pan=null;if(!this.drag)return;const d=this.drag;this.drag=null;if(d.moved)this.change("sketch_drag",{id:d.id,uv:this.uv(this.eventPos(e))});else this.draw();}
  wheel(e){e.preventDefault();const p=this.eventPos(e),before=this.uv(p);this.scale=Math.max(.02,Math.min(10000,this.scale*Math.exp(-e.deltaY*.0015)));const after=this.uv(p);this.center=add(this.center,sub(before,after));this.draw();}
- async change(op,args={}){if(!this.active||this.busy)return;this.busy=true;this.updateInfo();try{this.state=await this.send(op,args);this.dimEditing=null;this.selection.clear();this.mouse=null;this.draw();}catch(e){this.status(String(e));}finally{this.busy=false;this.updateInfo();this.draw();}}
+ async change(op,args={}){if(!this.active||this.busy)return;this.busy=true;this.updateInfo();try{this.state=await this.send(op,args);$("sk-info").dataset.revision=String(Number($("sk-info").dataset.revision||0)+1);this.dimEditing=null;this.selection.clear();this.mouse=null;this.draw();}catch(e){this.status(String(e));}finally{this.busy=false;this.updateInfo();this.draw();}}
  constraint(kind){const refs=[...this.selection];if(!refs.length){this.status("Выберите геометрию (Shift — несколько объектов)");return;}const args={kind,refs};if(["distance","hdistance","vdistance","radius","diameter"].includes(kind)){const v=Number($("sk-value").value);if(!(v>0)){this.status("Укажите положительный размер");return;}args.value=v;}this.change("sketch_constraint",args);}
  remove(){if(this.selection.size)this.change("sketch_delete",{ids:[...this.selection]});}
  async end(op){if(this.busy)return;if(op==="sketch_finish"&&this.tool==="spline"&&this.anchors.length){this.status("Завершите сплайн или отмените построение (Esc)");return;}this.busy=true;try{const result=await this.send(op);this.hide();this.finish(result);}catch(e){this.status(String(e));}finally{this.busy=false;this.updateInfo();}}
@@ -198,10 +202,15 @@ export class SketchEditor {
   if($("sk-show-regions").checked){c.fillStyle="#9bc8ff35";for(const region of this.state.regions||[]){c.beginPath();for(const tri of region.triangles){c.moveTo(...this.screen(region.vertices[tri[0]]));c.lineTo(...this.screen(region.vertices[tri[1]]));c.lineTo(...this.screen(region.vertices[tri[2]]));c.closePath();}c.fill();}}
   const {entities,points}=this.state.draft;
   const highlighted=new Set(this.mouse?.ref?.ids||[this.mouse?.ref?.id]);
-  for(const [id,paths] of Object.entries(this.state.curves)){const e=entities[id];c.strokeStyle=this.selection.has(id)?"#e89116":highlighted.has(id)?"#dca527":"#9bc8ff";c.lineWidth=this.selection.has(id)||highlighted.has(id)?2.6:1.8;c.setLineDash(e.construction?[6,4]:[]);
+  for(const [id,paths] of Object.entries(this.state.curves)){const e=entities[id];c.strokeStyle=this.selection.has(id)?"#e89116":highlighted.has(id)?(this.tool==="trim"?"#f08b80":"#dca527"):"#9bc8ff";c.lineWidth=this.selection.has(id)||highlighted.has(id)?2.6:1.8;c.setLineDash(e.construction?[6,4]:[]);
    for(const path of paths){if(!path.length)continue;c.beginPath();c.moveTo(...this.screen(path[0]));for(const p of path.slice(1))c.lineTo(...this.screen(p));c.stroke();}c.setLineDash([]);
   }
   for(const [id,p] of Object.entries(points)){const q=this.screen(p);c.fillStyle=this.selection.has(id)?"#e89116":id==="origin"?"#b84545":"#a7d0ff";c.beginPath();c.arc(...q,id==="origin"?4:3,0,tau);c.fill();}
+  if(this.modifying()&&this.mouse?.ref?.id){
+   const e=entities[this.mouse.ref.id],q=this.mouse.uv;
+   if(this.tool==="split"){const curve=this.curves().find(v=>v.id===this.mouse.ref.id);if(curve){const p=this.screen(project(curve,q));c.strokeStyle="#e89116";c.lineWidth=2;c.beginPath();c.arc(...p,5,0,tau);c.stroke();}}
+   if(this.tool==="extend"){const p=points[e.p1],r=points[e.p2],end=distance(p,q)<distance(r,q)?p:r;c.strokeStyle="#e89116";c.lineWidth=2;c.beginPath();c.arc(...this.screen(end),6,0,tau);c.stroke();}
+  }
   this.drawDimensions();
   if(this.drag?.moved){this.line(points[this.drag.id],this.drag.uv,"#e89116",1,[4,4]);const q=this.screen(this.drag.uv);c.beginPath();c.arc(...q,6,0,tau);c.strokeStyle="#e89116";c.lineWidth=2;c.stroke();}
   const a=this.anchors[0]?.uv,b=this.mouse?.uv;

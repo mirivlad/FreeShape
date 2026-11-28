@@ -7,6 +7,7 @@ import pathlib
 import sys
 import time
 import traceback
+import numpy as np
 from freeshape import __version__, kernel as K, features as F
 from freeshape.document import Document
 from freeshape.sketch import Sketch
@@ -53,7 +54,7 @@ def state_meshes(state, hidden=()):
 def region_mesh(face, plane=None):
     m = K.tessellate(face)
     vertices = [list(plane.to_local(v)) for v in m.verts] if plane is not None else m.verts.tolist()
-    return {"vertices": vertices, "triangles": m.tris.tolist(),
+    return {"vertices": vertices, "triangles": m.tris.tolist(), "area": K.face_info(face)["area"],
             "edges": [e.ravel().tolist() for e in m.edge_polys] if plane is None else []}
 
 
@@ -177,6 +178,59 @@ def point_at(s, p):
     return pid
 
 
+def trim_line(s, eid, at):
+    """Remove the clicked interval of a line, bounded by real intersections."""
+    e = s.entities[eid]
+    a, b = s.P(e["p1"]), s.P(e["p2"])
+    d = b-a
+    length2 = float(d @ d)
+    if length2 < 1e-12:
+        raise ValueError("Line is too short")
+    hits = [(0., None), (1., None)]
+    for oid, o in s.entities.items():
+        if oid == eid or o.get("helper"):
+            continue
+        if o["type"] == "line":
+            c, f = s.P(o["p1"]), s.P(o["p2"])-s.P(o["p1"])
+            if float(f @ f) < 1e-12:
+                continue
+            target = ("line", c, f)
+        elif o["type"] in ("circle", "arc"):
+            target = ("circle", s.P(o["c"]), s.radius(oid))
+        else:
+            continue
+        for q in OPS._intersections(("line", a, d), target):
+            t = float((q-a) @ d / length2)
+            if not 1e-6 < t < 1-1e-6:
+                continue
+            if o["type"] == "line":
+                u = float((q-c) @ f / (f @ f))
+                if not -1e-8 <= u <= 1+1e-8:
+                    continue
+            elif o["type"] == "arc":
+                a1, a2 = s.arc_angles(oid)
+                ang = (math.atan2(q[1]-target[1][1],q[0]-target[1][0])-a1) % (2*math.pi)
+                if ang > (a2-a1)+1e-8 and ang < 2*math.pi-1e-8:
+                    continue
+            hits.append((t, oid))
+    t = float(np.clip((np.asarray(at)-a) @ d/length2, 0, 1))
+    if any(oid is not None and abs(t-u)<1e-6 for u,oid in hits):
+        raise ValueError("Click between intersections")
+    lo = max((h for h in hits if h[0]<=t), key=lambda h:h[0], default=(0.,None))
+    hi = min((h for h in hits if h[0]>=t), key=lambda h:h[0], default=(1.,None))
+    hv = [c["type"] for c in s.constraints if c["refs"] == [eid] and c["type"] in ("horizontal","vertical")]
+    # Create remaining pieces before deleting the original, preserving shared endpoints.
+    for (u, target), end in ((lo,"p1"), (hi,"p2")):
+        if target is None:
+            continue
+        q = s.add_point(*(a+u*d))
+        new = s.add_line(e[end],q,e.get("construction",False)) if end=="p1" else s.add_line(q,e[end],e.get("construction",False))
+        for kind in hv:
+            s.add_constraint(kind,new)
+        s.add_constraint("point_on",q,target)
+    s.delete([eid])
+
+
 def sketch_edit(req):
     s = draft["sketch"]
     before = s.to_dict()
@@ -280,6 +334,22 @@ def sketch_edit(req):
                 s.add_arc(c,a,b,construction)
             else:
                 raise ValueError("Unsupported sketch tool")
+        elif op == "sketch_modify":
+            tool, eid = req["tool"], req["id"]
+            e = s.entities.get(eid, {})
+            if e.get("helper") or e.get("type") not in ("line","arc"):
+                raise ValueError("Select a line or arc")
+            at = [number(v) for v in req["uv"]]
+            if tool == "trim":
+                if e["type"] != "line":
+                    raise ValueError("Trim currently supports lines only")
+                trim_line(s,eid,at)
+            elif tool == "split":
+                OPS.split(s,eid,at)
+            elif tool == "extend":
+                OPS.extend(s,eid,at)
+            else:
+                raise ValueError("Unknown modification tool")
         elif op == "sketch_drag":
             pid = req["id"]
             if pid not in s.points or pid == "origin":
@@ -442,7 +512,7 @@ def call(request):
         transaction(lambda: doc.replace_feature(f))
     elif op == "begin_sketch":
         return begin_sketch(request)
-    elif op in ("sketch_draw","sketch_delete","sketch_constraint","sketch_drag","sketch_dimension"):
+    elif op in ("sketch_draw","sketch_delete","sketch_constraint","sketch_drag","sketch_dimension","sketch_modify"):
         return sketch_edit(request)
     elif op in ("sketch_undo","sketch_redo"):
         source,target = ("undo","redo") if op=="sketch_undo" else ("redo","undo")

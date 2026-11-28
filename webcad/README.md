@@ -103,3 +103,18 @@ Ellipse arcs, trimming, offsets, mirror and sketch fillets remain future work.
 Native regression: `python -m unittest -v webcad.test_sketch_tools`.
 The Chromium smoke suite additionally exercises each new tool through clicks,
 undo/redo, saving the native profile, and extrusion.
+
+
+## 0.3.6
+
+Sketch editing tools: trim a line between its neighbouring line/circle/arc
+intersections, split a line or arc using the desktop kernel operation, and
+extend a line or arc to the next curve. Tool hints, hover highlighting, cut
+point/end markers, undo/redo and rollback on failure. Trim retains surviving
+endpoints and horizontal/vertical constraints, and adds point-on constraints at
+cuts; other constraints referring to the original trimmed entity are removed.
+Trim of curves other than lines is not yet supported. Trim with no intersections
+removes the entire line, like desktop FreeShape. Helper geometry cannot be edited
+with these tools. Region selection now displays exact native face area;
+the selective-extrusion test compares the result to the solved region area
+rather than nominal click coordinates.

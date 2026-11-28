@@ -151,13 +151,20 @@ try {
  assert(profile.constraints.some(c=>c.type==="midpoint"&&c.refs[0]==="origin"&&c.refs[1]===helper[0]));
  await page.locator("#extrude").click();await page.waitForFunction(()=>Number(document.body.dataset.previewVolume)>0);
  assert.equal(await page.locator("#solid-regions input").count(),2);
+ const regionAreas=await page.locator("#solid-regions input").evaluateAll(els=>els.map(e=>Number(e.dataset.area)));
+ assert(regionAreas.every(a=>a>0));
+ await volume(0);
+ const allVolume=regionAreas.reduce((a,b)=>a+b,0)*10;
+ assert(Math.abs(Number(await page.locator("body").getAttribute("data-preview-volume"))-allVolume)<.01);
  await page.locator("#solid-regions input").first().uncheck();
- await page.waitForFunction(()=>Number(document.body.dataset.previewVolume)>0&&Number(document.body.dataset.previewVolume)<4500);
+ const oneVolume=regionAreas[1]*10;
+ await page.waitForFunction(v=>Math.abs(Number(document.body.dataset.previewVolume)-v)<.01,oneVolume);
  await page.locator("#solid-apply").click();
  await page.waitForFunction(()=>document.querySelector("#solid-dialog").hidden);
  await noError();assert.equal(await page.locator("#features button").count(),2);
  const finalVolume=Number(await page.locator("body").getAttribute("data-volume"));
- assert(Math.abs(finalVolume-4000)<100||Math.abs(finalVolume-1000)<100,"only one profile is extruded");
+ assert(Math.abs(finalVolume-oneVolume)<.01,"only one solved profile is extruded: "+finalVolume+" vs "+oneVolume);
+ assert.equal(JSON.parse((await save()).toString()).features[1].params.regions.length,1);
  console.log("PASS centre rectangle helper and selective multi-region extrusion");
  // Extended tools: actual clicks, native entities, and independently closed profiles.
  for(const tool of ["ellipse","polygon","polygon_out","spline"]){
@@ -194,6 +201,32 @@ try {
   await page.waitForFunction(()=>Number(document.body.dataset.volume)>0);await noError();
   console.log("PASS "+tool+" sketch, history and extrusion");
  }
+ // Editing tools: click geometry, not just the toolbar. Verify native saved segments.
+ await menuCommand("new");await volume(0);
+ await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});
+ const mc=await page.locator("#sketch-canvas").boundingBox(),mu=Math.min(mc.width,mc.height)/100;
+ const mo=[mc.x+mc.width/2,mc.y+mc.height/2];
+ async function modAt(x,y){await page.mouse.click(mo[0]+x*mu,mo[1]-y*mu);}
+ async function objects(n){await page.waitForFunction(n=>document.querySelector("#sk-info").textContent.startsWith(n+" объектов")&&document.body.dataset.status==="Готово",n);}
+ await page.locator('[data-tool="line"]').click();
+ await modAt(-30,-5);await modAt(-10,-5);await objects(1);
+ await modAt(-5,-15);await modAt(-5,5);await objects(2);
+ await page.locator('[data-tool="extend"]').click();await modAt(-11,-5);
+ await page.waitForFunction(()=>document.querySelector("#sk-constraints").textContent.includes("point_on"));
+ await page.locator('[data-tool="split"]').click();await modAt(-20,-5);await objects(3);
+ await page.locator("#sk-undo").click();await objects(2);
+ await page.locator('[data-tool="line"]').click();
+ await modAt(-20,-15);await modAt(-20,5);await objects(3);
+ await page.locator('[data-tool="trim"]').click();const rev=await page.locator("#sk-info").getAttribute("data-revision");await modAt(-12,-5);await page.waitForFunction(rev=>document.querySelector("#sk-info").dataset.revision!==rev,rev);await objects(3);
+ await page.waitForFunction(()=>document.querySelector("#sk-constraints").textContent.includes("point_on"));
+ await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});
+ await noError();
+ const edited=JSON.parse((await save()).toString()).features[0].params.sketch;
+ const horizontals=Object.values(edited.entities).filter(e=>e.type==="line"&&Math.abs(edited.points[e.p1][1]-edited.points[e.p2][1])<.01);
+ assert.equal(horizontals.length,1);
+ const span=horizontals.map(e=>Math.abs(edited.points[e.p1][0]-edited.points[e.p2][0]))[0];
+ assert(Math.abs(span-10)<1,"trimmed length "+span);
+ console.log("PASS extend, split, undo and trim through UI");
  await menuCommand("offline");
  await page.waitForFunction(()=>document.body.dataset.offline==="ready"||document.querySelector("#errors").textContent.trim(),{},{timeout:240000});await noError();
  await context.setOffline(true);await page.reload();await ready();await volume(0);
