@@ -184,6 +184,113 @@ class SketchTools(unittest.TestCase):
             self.assertEqual(bridge.draft["sketch"].to_dict(),before)
             self.assertFalse(bridge.draft["undo"])
 
+    def geometric(self, kind, *refs):
+        return bridge.call({"op":"sketch_constraint","kind":kind,"refs":list(refs)})
+
+    def test_group_hv_and_replacement(self):
+        first=self.draw("line",[(10,10),(10,20)])
+        a=next(iter(first["draft"]["entities"]))
+        b=next(i for i in self.draw("line",[(30,10),(30,25)])["draft"]["entities"] if i!=a)
+        self.geometric("vertical",a,b)
+        result=self.geometric("horizontal",a,b)
+        sk=bridge.draft["sketch"]
+        self.assertFalse(result["bad"])
+        for eid,length in ((a,10),(b,15)):
+            e=sk.entities[eid]
+            p,q=sk.P(e["p1"]),sk.P(e["p2"])
+            self.assertAlmostEqual(p[1],q[1],places=6)
+            self.assertAlmostEqual(math.dist(p,q),length,places=6)
+        self.assertFalse(any(c["type"]=="vertical" for c in sk.constraints))
+        undo=len(bridge.draft["undo"])
+        self.geometric("horizontal",a,b)
+        self.assertEqual(len(bridge.draft["undo"]),undo)
+        bridge.call({"op":"sketch_undo"})
+        self.assertEqual(sum(c["type"]=="vertical" for c in bridge.draft["sketch"].constraints),2)
+
+    def test_fix_geometry_and_equal_radii(self):
+        a=next(iter(self.draw("circle",[(0,0),(5,0)])["draft"]["entities"]))
+        b=next(i for i in self.draw("circle",[(20,0),(28,0)])["draft"]["entities"] if i!=a)
+        self.geometric("fix",a)
+        result=self.geometric("equal",a,b)
+        sk=bridge.draft["sketch"]
+        self.assertAlmostEqual(sk.radius(b),5,places=6)
+        self.assertFalse(result["bad"])
+        self.assertTrue(any(c["type"]=="radius" and c["refs"]==[a] for c in sk.constraints))
+
+    def test_tangent_normal_and_coincidence(self):
+        a=next(iter(self.draw("circle",[(0,0),(5,0)])["draft"]["entities"]))
+        b=next(i for i in self.draw("line",[(-10,6),(10,6)])["draft"]["entities"] if i!=a)
+        self.geometric("fix",a)
+        self.geometric("horizontal",b)
+        result=self.geometric("tangent",a,b)
+        sk=bridge.draft["sketch"]
+        self.assertAlmostEqual(abs(sk.P(sk.entities[b]["p1"])[1]),5,places=6)
+        self.assertFalse(result["bad"])
+        bridge.call({"op":"sketch_undo"})
+        result=self.geometric("normal",a,b)
+        self.assertAlmostEqual(bridge.draft["sketch"].P(bridge.draft["sketch"].entities[b]["p1"])[1],0,places=6)
+        self.assertFalse(result["bad"])
+        c=next(i for i,e in self.draw("point",[(3,4)])["draft"]["entities"].items() if e["type"]=="point")
+        result=self.geometric("coincident",c,a)
+        self.assertTrue(any(k["type"]=="point_on" for k in result["draft"]["constraints"]))
+
+    def test_tangent_internal_external_and_concentric(self):
+        for x,expected in ((12,1),(2,-1)):
+            with self.subTest(x=x):
+                self.setUp()
+                a=next(iter(self.draw("circle",[(0,0),(8,0)])["draft"]["entities"]))
+                b=next(i for i in self.draw("circle",[(x,0),(x+3,0)])["draft"]["entities"] if i!=a)
+                r=self.geometric("tangent",a,b)
+                c=next(c for c in r["draft"]["constraints"] if c["type"]=="tangent")
+                self.assertEqual(c["value"],expected)
+                self.assertFalse(r["bad"])
+                bridge.call({"op":"sketch_undo"})
+                r=self.geometric("coincident",a,b)
+                self.assertTrue(any(c["type"]=="concentric" for c in r["draft"]["constraints"]))
+
+    def test_symmetry_points_lines_and_circles(self):
+        for tool,coords1,coords2 in [
+            ("point",[(-5,5)],[(6,5)]),
+            ("line",[(-5,5),(-5,10)],[(6,10),(6,5)]),
+            ("circle",[(-5,5),(-3,5)],[(6,5),(8,5)])]:
+            with self.subTest(tool=tool):
+                self.setUp()
+                axis=next(iter(self.draw("line",[(0,-20),(0,20)])["draft"]["entities"]))
+                self.geometric("fix",axis)
+                a=next(i for i in self.draw(tool,coords1)["draft"]["entities"] if i!=axis)
+                b=next(i for i in self.draw(tool,coords2)["draft"]["entities"] if i not in (a,axis))
+                r=self.geometric("symmetric",a,b,axis)
+                self.assertFalse(r["bad"])
+                self.assertEqual(sum(c["type"]=="symmetric" for c in r["draft"]["constraints"]),2 if tool=="line" else 1)
+                if tool=="circle":
+                    self.assertTrue(any(c["type"]=="equal" for c in r["draft"]["constraints"]))
+
+    def test_normal_ellipse_and_invalid_selection(self):
+        e=next(i for i,e in self.draw("ellipse",[(0,0),(20,0),(0,10)])["draft"]["entities"].items() if e["type"]=="ellipse")
+        l=next(i for i,e in self.draw("line",[(19,1),(30,2)])["draft"]["entities"].items() if e["type"]=="line" and not e.get("construction"))
+        r=self.geometric("perpendicular",e,l)
+        c=next(c for c in r["draft"]["constraints"] if c["type"]=="normal")
+        self.assertEqual(c["refs"][:2],[l,e])
+        self.assertEqual(len(c["refs"]),3)
+        before=bridge.draft["sketch"].to_dict()
+        count=len(bridge.draft["undo"])
+        with self.assertRaises(ValueError):
+            self.geometric("tangent",e,l)
+        self.assertEqual(bridge.draft["sketch"].to_dict(),before)
+        self.assertEqual(len(bridge.draft["undo"]),count)
+
+    def test_unconstrained_arc_drag_exact_target(self):
+        result=bridge.call({"op":"sketch_draw","tool":"arc","points":[{"uv":[0,0],"ref":{"kind":"point","id":"origin"}},{"uv":[-20,0]},{"uv":[-10,10]}]})
+        mid=next(e["p"] for e in result["draft"]["entities"].values() if e["type"]=="point")
+        r=bridge.call({"op":"sketch_drag","id":mid,"uv":[-10,6]})
+        self.assertLess(math.dist(r["draft"]["points"][mid],[-10,6]),1e-6)
+        self.assertEqual(len(r["draft"]["constraints"]),1)
+        self.assertFalse(r["bad"])
+        self.geometric("fix",mid)
+        r=bridge.call({"op":"sketch_drag","id":mid,"uv":[-10,4]})
+        self.assertLess(math.dist(r["draft"]["points"][mid],[-10,6]),1e-6)
+        self.assertFalse(r["bad"])
+
     def test_bad_inputs_roll_back(self):
         for tool, points, args in [
             ("ellipse", [(0, 0), (10, 0), (5, 0)], {}),

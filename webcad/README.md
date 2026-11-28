@@ -141,3 +141,17 @@ debounced cursor preview uses the native OCP curve without editing history.
 Advanced smart-inference (tangent, parallel, equal-circle and model-derived
 references), expressions/variables, constraint and selection parity are separate
 milestones; this release does not claim those capabilities.
+
+## 0.3.8 — geometric constraint parity
+
+Manual geometric constraints now accept desktop-style combinations: tangent
+(line/circular curve or internal/external circular pairs), normal (including
+ellipses), symmetry (points, lines, circular curves about a line), equal radii,
+coincidence, concentricity, group fixation and horizontal/vertical replacement.
+Point-on and arc midpoint remain supported. Select first with Shift, or choose
+a constraint then pick objects. New original toolbar icons, selection hints,
+constraint list glyphs and hover highlighting. Uses the native solver, preserves
+undo/redo, rejects invalid picks and rolls back unsatisfiable new constraints.
+Exact feasible point dragging uses a temporary constraint, with weighted
+fallback for constrained targets. No temporary constraint is persisted.
+Automatic inference and viewport dimension placement remain separate milestones.

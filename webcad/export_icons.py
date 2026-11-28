@@ -9,7 +9,7 @@ spec = importlib.util.spec_from_file_location("freeshape_icons", "/src/freeshape
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 out = pathlib.Path("/site/icons")
-names = "part origin plane sketch extrude revolve fillet chamfer undo redo line rect circle arc3 point construction dimension horizontal vertical parallel perpendicular equal fix coincident midpoint concentric delete fit iso finish_sketch error history folder variable hole thread shell sweep loft mirror boolean split move linear_pattern circular_pattern derived configs offset_surface thicken rib draft delete_face move_face bounding_box compound explode_part helix measure_value mate_connector sm_base sm_flange ellipse spline polygon polygon_out center_rect arc_center sk_fillet sk_chamfer trim sk_split sk_extend use offset slot sk_mirror sk_lpattern sk_cpattern".split()
+names = "part origin plane sketch extrude revolve fillet chamfer undo redo line rect circle arc3 point construction dimension horizontal vertical parallel perpendicular tangent normal symmetric equal fix coincident midpoint concentric delete fit iso finish_sketch error history folder variable hole thread shell sweep loft mirror boolean split move linear_pattern circular_pattern derived configs offset_surface thicken rib draft delete_face move_face bounding_box compound explode_part helix measure_value mate_connector sm_base sm_flange ellipse spline polygon polygon_out center_rect arc_center sk_fillet sk_chamfer trim sk_split sk_extend use offset slot sk_mirror sk_lpattern sk_cpattern".split()
 module.export_builtin(names, str(out), size=64)
 pm = QPixmap(64, 64)
 pm.fill(Qt.transparent)
