@@ -124,3 +124,20 @@ Compatibility correction: OCP 7.x collection names are supported alongside
 OCP 8.x, so spline interpolation and control-point splines can use the native
 kernel in either environment. Failed generation of sketch display geometry
 now rolls back the edit before adding any undo entry.
+
+
+## 0.3.7 — drawing interaction parity
+
+Line tool chains shared endpoints until Escape, tool change or closure onto an
+existing point. Optional drawing dimensions are offered for line length,
+rectangle width/height, circle diameter, ellipse minor radius and regular
+polygon diameter (across flats for circumscribed polygons). Confirm with
+Enter; continuing to draw or Escape dismisses the offer without adding a
+constraint. Each accepted dimension has its own undo step. Three-point arcs
+now use desktop click order (start, end, point on arc), keep the third point
+as native constrained geometry and show a true circular preview. Interpolating
+splines close on the first point or finish on double-click/Enter, and the
+debounced cursor preview uses the native OCP curve without editing history.
+Advanced smart-inference (tangent, parallel, equal-circle and model-derived
+references), expressions/variables, constraint and selection parity are separate
+milestones; this release does not claim those capabilities.

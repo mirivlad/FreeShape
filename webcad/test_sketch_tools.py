@@ -124,6 +124,66 @@ class SketchTools(unittest.TestCase):
         self.assertFalse(bridge.draft["undo"])
         self.assertFalse(bridge.draft["redo"])
 
+    def test_chain_and_dimension_offer(self):
+        first = bridge.call({"op":"sketch_draw","tool":"line","points":[{"uv":[0,0],"ref":{"kind":"point","id":"origin"}},{"uv":[10,0]}]})
+        end = first["chain_end"]
+        self.assertIn(end, first["draft"]["points"])
+        offer = first["offers"][0]
+        self.assertEqual(offer["label"], "Длина")
+        result = bridge.call({"op": "sketch_offer_dimension", "kind": offer["kind"],
+                              "refs": offer["refs"], "value": 20})
+        self.assertAlmostEqual(bridge.draft["sketch"].length(offer["refs"][0]) if hasattr(bridge.draft["sketch"], "length") else math.dist(*[result["draft"]["points"][result["draft"]["entities"][offer["refs"][0]][k]] for k in ("p1","p2")]),20,places=6)
+        result = bridge.call({"op": "sketch_draw", "tool": "line", "points": [
+            {"uv": result["draft"]["points"][end], "ref": {"kind": "point", "id": end}},
+            {"uv": [20, 15]}]})
+        lines = list(result["draft"]["entities"].values())
+        self.assertEqual(lines[0]["p2"], lines[1]["p1"])
+        result = bridge.call({"op": "sketch_draw", "tool": "line", "points": [
+            {"uv": result["draft"]["points"][result["chain_end"]], "ref": {"kind":"point","id":result["chain_end"]}},
+            {"uv": [0,0], "ref":{"kind":"point","id":"origin"}}]})
+        self.assertIsNone(result["chain_end"])
+        self.assertEqual(len(result["regions"]),1)
+
+    def test_arc_third_point_is_parametric(self):
+        result = bridge.call({"op":"sketch_draw","tool":"arc","points":[{"uv":[0,0],"ref":{"kind":"point","id":"origin"}},{"uv":[20,0]},{"uv":[10,10]}]})
+        ents = result["draft"]["entities"]
+        eid, arc = next((i,e) for i,e in ents.items() if e["type"]=="arc")
+        mid = next(e["p"] for e in ents.values() if e["type"]=="point")
+        self.assertTrue(any(c["type"]=="point_on" and c["refs"]==[mid,eid] for c in result["draft"]["constraints"]))
+        self.assertAlmostEqual(bridge.draft["sketch"].radius(eid),10,places=6)
+        for pid in (arc["p1"],arc["p2"]):
+            if pid!="origin":
+                bridge.call({"op":"sketch_constraint","kind":"fix","refs":[pid]})
+        result = bridge.call({"op":"sketch_drag","id":mid,"uv":[10,5]})
+        self.assertAlmostEqual(bridge.draft["sketch"].radius(eid),12.5,delta=.1)
+        self.assertFalse(result["bad"])
+        self.assertEqual(len(result["draft"]["entities"]),2)
+
+    def test_dimension_offers(self):
+        for tool,coords,args,labels in [
+            ("rect",[(0,0),(10,20)],{},["Ширина","Высота"]),
+            ("center_rect",[(0,0),(10,20)],{},["Ширина","Высота"]),
+            ("circle",[(0,0),(10,0)],{},["Диаметр"]),
+            ("ellipse",[(0,0),(20,0),(0,10)],{},["Вторая полуось"]),
+            ("polygon",[(0,0),(10,0)],{"sides":6},["Диаметр"]),
+            ("polygon_out",[(0,0),(10,0)],{"sides":6},["Размер между гранями"])]:
+            with self.subTest(tool=tool):
+                self.setUp()
+                result=self.draw(tool,coords,**args)
+                self.assertEqual([o["label"] for o in result["offers"]],labels)
+                for offer in result["offers"]:
+                    result=bridge.call({"op":"sketch_offer_dimension","kind":offer["kind"],"refs":offer["refs"],"value":offer["value"]*1.25})
+                    self.assertFalse(result["bad"])
+                self.assertEqual(len(result["regions"]),1)
+
+    def test_spline_preview_is_native_and_read_only(self):
+        before=bridge.draft["sketch"].to_dict()
+        for closed in (False,True):
+            r=bridge.call({"op":"sketch_spline_preview","points":[[0,0],[10,10],[20,0],[10,-10]],"closed":closed})
+            self.assertGreater(len(r["points"]),4)
+            self.assertEqual(bridge.draft["sketch"].to_dict(),before)
+            self.assertFalse(bridge.draft["undo"])
+
     def test_bad_inputs_roll_back(self):
         for tool, points, args in [
             ("ellipse", [(0, 0), (10, 0), (5, 0)], {}),

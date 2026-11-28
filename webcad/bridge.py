@@ -236,6 +236,8 @@ def sketch_edit(req):
     before = s.to_dict()
     old_bad = set(s.status.get("bad", []))
     weights = None
+    offers = []
+    chain_end = None
     try:
         op = req["op"]
         if op == "sketch_draw":
@@ -250,6 +252,9 @@ def sketch_edit(req):
                 if a == b or math.dist(s.points[a], s.points[b]) < 1e-8:
                     raise ValueError("Zero length line")
                 eid = s.add_line(a, b, construction)
+                offers.append(("distance", [eid], "Длина"))
+                if (ps[1].get("ref") or {}).get("kind") != "point":
+                    chain_end = b
                 if not ps[1].get("free") and abs(s.points[a][1]-s.points[b][1]) < 1e-8:
                     s.add_constraint("horizontal", eid)
                 elif not ps[1].get("free") and abs(s.points[a][0]-s.points[b][0]) < 1e-8:
@@ -268,6 +273,7 @@ def sketch_edit(req):
                 ids = [s.add_line(p,q,construction) for p,q in ((a,c),(c,b),(b,d),(d,a))]
                 for eid,ctype in zip(ids, ("horizontal","vertical","horizontal","vertical")):
                     s.add_constraint(ctype,eid)
+                offers.extend([("distance", [ids[0]], "Ширина"), ("distance", [ids[1]], "Высота")])
                 if center is not None:
                     diag = s.add_line(a,b,True)
                     s.entities[diag]["helper"] = True
@@ -277,6 +283,7 @@ def sketch_edit(req):
                 if r < 1e-8:
                     raise ValueError("Zero radius")
                 eid = s.add_circle(a,r,construction)
+                offers.append(("diameter", [eid], "Диаметр"))
                 if ps[1].get("ref"):
                     rim = point_at(s,ps[1])
                     if rim != a:
@@ -295,6 +302,7 @@ def sketch_edit(req):
                     raise ValueError("Ellipse needs two non-zero axes")
                 eid = s.add_ellipse(a, b, minor, construction)
                 s.add_line(a, b, True)
+                offers.append(("radius", [eid], "Вторая полуось"))
             elif tool in ("polygon", "polygon_out"):
                 sides = number(req.get("sides", 6))
                 if not sides.is_integer() or not 3 <= sides <= 64:
@@ -306,7 +314,8 @@ def sketch_edit(req):
                 size = math.hypot(*d)
                 inscribed = tool == "polygon"
                 angle, level = OPS.polygon_angle(d, sides, inscribed)
-                OPS.polygon(s, (x,y), angle, size, sides, inscribed, construction, a, level)
+                made = OPS.polygon(s, (x,y), angle, size, sides, inscribed, construction, a, level)
+                offers.append(("diameter", [made["circle"]], "Диаметр" if inscribed else "Размер между гранями"))
             elif tool == "spline":
                 ids = [a] + [point_at(s, p) for p in ps[1:]]
                 closed = bool(req.get("closed"))
@@ -316,7 +325,7 @@ def sketch_edit(req):
                     raise ValueError("Spline needs distinct points")
                 s.add_spline(ids, closed, construction)
             elif tool == "arc":
-                # Three points on the arc: start, through, end.
+                # Desktop order: start, end, through.
                 p,q,r = [item["uv"] for item in ps]
                 x,y = p
                 u,v = q
@@ -328,10 +337,16 @@ def sketch_edit(req):
                 center = [(pp*(v-z)+qq*(z-y)+rr*(y-v))/den,
                           (pp*(w-u)+qq*(x-w)+rr*(u-x))/den]
                 c = s.add_point(*center)
-                b = point_at(s,ps[2])
-                if den < 0:
+                b = point_at(s,ps[1])
+                if den > 0:
                     a,b = b,a
-                s.add_arc(c,a,b,construction)
+                eid = s.add_arc(c,a,b,construction)
+                m = point_at(s,ps[2])
+                if m in (a,b,c):
+                    raise ValueError("Arc needs three distinct points")
+                s.add_constraint("point_on",m,eid)
+                if not any(m in s.entity_points(i) for i in s.entities):
+                    s.add_point_entity(m)
             else:
                 raise ValueError("Unsupported sketch tool")
         elif op == "sketch_modify":
@@ -356,6 +371,16 @@ def sketch_edit(req):
                 raise ValueError("Select a movable point")
             s.points[pid] = [number(v) for v in req["uv"]]
             weights = {(pid, 0): 1e3, (pid, 1): 1e3}
+        elif op == "sketch_offer_dimension":
+            kind, refs = req["kind"], req["refs"]
+            if len(refs) != 1 or refs[0] not in s.entities:
+                raise ValueError("Select a drawn entity")
+            eid = refs[0]
+            typ = s.entities[eid]["type"]
+            if not ((kind == "distance" and typ == "line") or
+                    (kind in ("radius","diameter") and typ in ("circle","arc","ellipse"))):
+                raise ValueError("Invalid drawing dimension")
+            s.add_constraint(kind,eid,value=number(req["value"],1e-8))
         elif op == "sketch_dimension":
             c = next(c for c in s.constraints if c["id"] == req["id"])
             if c["type"] not in ("distance","hdistance","vdistance","radius","diameter","angle") or "expr" in c:
@@ -419,7 +444,12 @@ def sketch_edit(req):
     draft["undo"].append(before)
     del draft["undo"][:-100]
     draft["redo"].clear()
-    result.update(undo=True, redo=False)
+    result.update(undo=True, redo=False, chain_end=chain_end)
+    result["offers"] = []
+    for kind, refs, label in offers:
+        e = s.entities[refs[0]]
+        value = math.dist(s.points[e["p1"]],s.points[e["p2"]]) if kind == "distance" else s.radius(refs[0]) * (2 if kind == "diameter" else 1)
+        result["offers"].append({"kind": kind, "refs": refs, "label": label, "value": value})
     return result
 
 
@@ -516,7 +546,7 @@ def call(request):
         transaction(lambda: doc.replace_feature(f))
     elif op == "begin_sketch":
         return begin_sketch(request)
-    elif op in ("sketch_draw","sketch_delete","sketch_constraint","sketch_drag","sketch_dimension","sketch_modify"):
+    elif op in ("sketch_draw","sketch_delete","sketch_constraint","sketch_drag","sketch_dimension","sketch_modify","sketch_offer_dimension"):
         return sketch_edit(request)
     elif op in ("sketch_undo","sketch_redo"):
         source,target = ("undo","redo") if op=="sketch_undo" else ("redo","undo")
@@ -525,6 +555,11 @@ def call(request):
             draft["sketch"] = Sketch.from_dict(draft[source].pop())
             draft["sketch"].solve()
         return sketch_view()
+    elif op == "sketch_spline_preview":
+        pts = [[number(v) for v in p] for p in request["points"]]
+        if len(pts) > 128:
+            raise ValueError("Too many spline points")
+        return {"points": K.spline_sample(pts, bool(request.get("closed")), 24).tolist()}
     elif op == "sketch_finish":
         finish_sketch()
     elif op == "sketch_cancel":

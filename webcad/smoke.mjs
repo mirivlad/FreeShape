@@ -176,9 +176,8 @@ try {
   async function at(x,y){await page.mouse.click(o[0]+x*u,o[1]-y*u);}
   if(tool==="ellipse"){await at(0,0);await at(-20,0);await at(0,10);}
   else if(tool==="spline"){
-   await page.locator("#sk-spline-closed").check();
    await at(0,0);await at(-20,0);await at(-20,20);await at(0,20);
-   await page.locator("#sk-spline-done").click();
+   await at(0,0);
   }else{
    await page.locator("#sk-sides").fill("6");
    await at(0,0);await at(-15,0);
@@ -210,6 +209,7 @@ try {
  async function objects(n){await page.waitForFunction(n=>document.querySelector("#sk-info").textContent.startsWith(n+" объектов")&&document.body.dataset.status==="Готово",n);}
  await page.locator('[data-tool="line"]').click();
  await modAt(-30,-5);await modAt(-10,-5);await objects(1);
+ await page.locator('[data-tool="line"]').click();
  await modAt(-5,-15);await modAt(-5,5);await objects(2);
  await page.locator('[data-tool="extend"]').click();await modAt(-11,-5);
  await page.waitForFunction(()=>document.querySelector("#sk-constraints").textContent.includes("point_on"));
@@ -227,6 +227,57 @@ try {
  const span=horizontals.map(e=>Math.abs(edited.points[e.p1][0]-edited.points[e.p2][0]))[0];
  assert(Math.abs(span-10)<1,"trimmed length "+span);
  console.log("PASS extend, split, undo and trim through UI");
+ // Drawing parity: line chain, optional dimensions and parametric third arc point.
+ await menuCommand("new");await volume(0);
+ await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});
+ const pc=await page.locator("#sketch-canvas").boundingBox(),pu=Math.min(pc.width,pc.height)/100;
+ const po=[pc.x+pc.width/2,pc.y+pc.height/2];
+ async function parityAt(x,y){await page.mouse.click(po[0]+x*pu,po[1]-y*pu);}
+ await page.locator('[data-tool="line"]').click();
+ await parityAt(0,0);await parityAt(-20,0);await objects(1);
+ await page.locator("#sk-offer-value").fill("20");await page.locator("#sk-offer-value").press("Enter");
+ await page.waitForFunction(()=>document.querySelector("#sk-draw-dims").hidden&&document.querySelector("#sk-constraints input")?.value==="20");
+ await parityAt(-20,-20);await objects(2);
+ await parityAt(0,-20);await objects(3);
+ await parityAt(0,0);await objects(4);
+ await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});
+ await noError();assert.equal(await page.locator("body").getAttribute("data-regions"),"1");
+ const chain=JSON.parse((await save()).toString()).features[0].params.sketch;
+ const cl=Object.values(chain.entities);assert.equal(cl.length,4);assert.equal(new Set(cl.flatMap(e=>[e.p1,e.p2])).size,4);
+ assert(chain.constraints.some(c=>c.type==="distance"&&c.value===20));
+ console.log("PASS chained lines, close onto existing point and inline length");
+ await menuCommand("new");await volume(0);
+ await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});
+ await page.locator('[data-tool="rect"]').click();await parityAt(0,0);await parityAt(-20,-20);await objects(4);
+ await page.locator("#sk-offer-value").fill("25");await page.locator("#sk-offer-value").press("Enter");
+ await page.waitForFunction(()=>document.querySelector("#sk-offer-label").textContent.includes("Высота"));
+ await page.locator("#sk-offer-value").fill("15");await page.locator("#sk-offer-value").press("Enter");
+ await page.waitForFunction(()=>document.querySelector("#sk-draw-dims").hidden);
+ await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});
+ await noError();await page.locator("#extrude").click();await page.waitForFunction(()=>Math.abs(Number(document.body.dataset.previewVolume)-3750)<.1);
+ await page.locator("#solid-cancel").click();
+ console.log("PASS rectangle drawing dimensions set exact profile area");
+ await menuCommand("new");await volume(0);
+ await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});
+ await page.locator('[data-tool="arc"]').click();await parityAt(0,0);await parityAt(-20,0);await parityAt(-10,10);await objects(2);
+ await page.locator('[data-tool="select"]').click();
+ await page.mouse.move(po[0]-10*pu,po[1]-10*pu);await page.mouse.down();await page.mouse.move(po[0]-10*pu,po[1]-6*pu,{steps:5});await page.mouse.up();
+ await page.waitForFunction(()=>document.body.dataset.status==="Готово");await noError();
+ await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});
+ const arcShape=JSON.parse((await save()).toString()).features[0].params.sketch;
+ const [aid]=Object.entries(arcShape.entities).find(([,e])=>e.type==="arc");
+ const third=Object.values(arcShape.entities).find(e=>e.type==="point").p;
+ assert(arcShape.constraints.some(c=>c.type==="point_on"&&c.refs[0]===third&&c.refs[1]===aid));
+ assert(Math.abs(arcShape.points[third][1]-6)<.1);
+ console.log("PASS editable third point of three-point arc");
+ await menuCommand("new");await volume(0);
+ await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});
+ await page.locator('[data-tool="spline"]').click();await parityAt(0,0);await parityAt(-20,0);
+ await page.mouse.dblclick(po[0]-20*pu,po[1]-20*pu);await objects(1);
+ await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});
+ const openSpline=Object.values(JSON.parse((await save()).toString()).features[0].params.sketch.entities)[0];
+ assert.equal(openSpline.pts.length,3);assert(!openSpline.closed);
+ console.log("PASS open spline double-click completion");
  await menuCommand("offline");
  await page.waitForFunction(()=>document.body.dataset.offline==="ready"||document.querySelector("#errors").textContent.trim(),{},{timeout:240000});await noError();
  await context.setOffline(true);await page.reload();await ready();await volume(0);
