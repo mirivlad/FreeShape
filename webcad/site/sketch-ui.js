@@ -227,7 +227,7 @@ export class SketchEditor {
   input.addEventListener("blur",()=>close(false));
  }
  line(a,b,color,width=1,dash=[]){const c=this.ctx,p=this.screen(a),q=this.screen(b);c.beginPath();c.setLineDash(dash);c.strokeStyle=color;c.lineWidth=width;c.moveTo(...p);c.lineTo(...q);c.stroke();c.setLineDash([]);}
- draw(){if(!this.active||!this.state||!this.w)return;const c=this.ctx;c.fillStyle="#6d7680";c.fillRect(0,0,this.w,this.h);
+ draw(){if(!this.active||!this.state||!this.w)return;this.canvas.dataset.transform=JSON.stringify({center:this.center,scale:this.scale,width:this.w,height:this.h});const c=this.ctx;c.fillStyle="#6d7680";c.fillRect(0,0,this.w,this.h);
   const step=Math.pow(10,Math.floor(Math.log10(55/this.scale)));const spacing=step*this.scale<18?step*5:step;const lo=this.uv([0,this.h]),hi=this.uv([this.w,0]);
   for(let x=Math.ceil(lo[0]/spacing)*spacing;x<=hi[0];x+=spacing)this.line([x,lo[1]],[x,hi[1]],"#77818b");
   for(let y=Math.ceil(lo[1]/spacing)*spacing;y<=hi[1];y+=spacing)this.line([lo[0],y],[hi[0],y],"#77818b");

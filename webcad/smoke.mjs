@@ -230,9 +230,12 @@ try {
  // Drawing parity: line chain, optional dimensions and parametric third arc point.
  await menuCommand("new");await volume(0);
  await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});
- const pc=await page.locator("#sketch-canvas").boundingBox(),pu=Math.min(pc.width,pc.height)/100;
- const po=[pc.x+pc.width/2,pc.y+pc.height/2];
- async function parityAt(x,y){await page.mouse.click(po[0]+x*pu,po[1]-y*pu);}
+ async function screenPoint(x,y){
+  const cv=page.locator("#sketch-canvas");await cv.waitFor({state:"visible"});
+  const b=await cv.boundingBox(),t=JSON.parse(await cv.getAttribute("data-transform"));
+  return [b.x+t.width/2+(x-t.center[0])*t.scale,b.y+t.height/2-(y-t.center[1])*t.scale];
+ }
+ async function parityAt(x,y){await page.mouse.click(...await screenPoint(x,y));}
  await page.locator('[data-tool="line"]').click();
  await parityAt(0,0);await parityAt(-20,0);await objects(1);
  await page.locator("#sk-offer-value").fill("20");await page.locator("#sk-offer-value").press("Enter");
@@ -262,7 +265,7 @@ try {
  await page.locator('[data-tool="arc"]').click();await parityAt(0,0);await parityAt(-20,0);await parityAt(-10,10);await objects(2);
  await page.locator('[data-tool="select"]').click();
  const dragRev=await page.locator("#sk-info").getAttribute("data-revision");
- await page.mouse.move(po[0]-10*pu,po[1]-10*pu);await page.mouse.down();await page.mouse.move(po[0]-10*pu,po[1]-6*pu,{steps:5});await page.mouse.up();
+ await page.mouse.move(...await screenPoint(-10,10));await page.mouse.down();await page.mouse.move(...await screenPoint(-10,6),{steps:5});await page.mouse.up();
  await page.waitForFunction(rev=>document.querySelector("#sk-info").dataset.revision!==rev&&document.body.dataset.status==="Готово",dragRev);await noError();
  await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});
  const arcShape=JSON.parse((await save()).toString()).features[0].params.sketch;
@@ -274,7 +277,7 @@ try {
  await menuCommand("new");await volume(0);
  await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});
  await page.locator('[data-tool="spline"]').click();await parityAt(0,0);await parityAt(-20,0);
- await page.mouse.dblclick(po[0]-20*pu,po[1]-20*pu);await objects(1);
+ await page.mouse.dblclick(...await screenPoint(-20,-20));await objects(1);
  await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});
  const openSpline=Object.values(JSON.parse((await save()).toString()).features[0].params.sketch.entities)[0];
  assert.equal(openSpline.pts.length,3);assert(!openSpline.closed);
@@ -282,9 +285,7 @@ try {
  // Constraint parity: native constraints applied from toolbar and through direct picking.
  await menuCommand("new");await volume(0);
  await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});
- const cb=await page.locator("#sketch-canvas").boundingBox(),cu=Math.min(cb.width,cb.height)/100;
- const co=[cb.x+cb.width/2,cb.y+cb.height/2];
- async function conAt(x,y,shift=false){if(shift)await page.keyboard.down("Shift");try{await page.mouse.click(co[0]+x*cu,co[1]-y*cu);}finally{if(shift)await page.keyboard.up("Shift");}}
+ async function conAt(x,y,shift=false){if(shift)await page.keyboard.down("Shift");try{await parityAt(x,y);}finally{if(shift)await page.keyboard.up("Shift");}}
  async function conCount(kind,n){await page.waitForFunction(([kind,n])=>document.querySelectorAll("#sk-constraints [data-constraint-type="+kind+"]").length===n&&document.body.dataset.status==="Готово",[kind,n]);await noError();}
  await page.locator('[data-tool="circle"]').click();
  await conAt(-25,0);await conAt(-19,0);await objects(1);
@@ -314,6 +315,34 @@ try {
  const hv=JSON.parse((await save()).toString()).features[0].params.sketch;
  for(const e of Object.values(hv.entities)){const a=hv.points[e.p1],b=hv.points[e.p2];assert(Math.abs(a[1]-b[1])<1e-6);assert(Math.abs(Math.hypot(b[0]-a[0],b[1]-a[1])-20)<.2);}
  console.log("PASS group horizontal replaces vertical without collapse");
+ await menuCommand("new");await volume(0);
+ await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});
+ await page.locator('[data-tool="line"]').click();
+ await conAt(-20,-15);await conAt(-20,15);await objects(1);
+ await page.locator('[data-tool="point"]').click();
+ await conAt(-28,5);await objects(2);await conAt(-10,5);await objects(3);
+ await page.locator('[data-tool="select"]').click();
+ await conAt(-20,0);await page.locator('[data-constraint="fix"]').click();await conCount("fix",2);
+ await page.locator('[data-constraint="symmetric"]').click();await conAt(-28,5);await conAt(-10,5);await conAt(-20,0);
+ await conCount("symmetric",1);
+ await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});
+ const sy=JSON.parse((await save()).toString()).features[0].params.sketch;
+ const sc=sy.constraints.find(c=>c.type==="symmetric");
+ assert(Math.abs(sy.points[sc.refs[0]][0]+sy.points[sc.refs[1]][0]+40)<.05);
+ assert(Math.abs(sy.points[sc.refs[0]][1]-sy.points[sc.refs[1]][1])<1e-6);
+ console.log("PASS symmetry of two points about a selected fixed axis");
+ await menuCommand("new");await volume(0);
+ await page.locator("#sketch").click();await page.locator("#sketch-canvas").waitFor({state:"visible"});
+ await page.locator('[data-tool="circle"]').click();await conAt(-25,0);await conAt(-20,0);await objects(1);
+ await page.locator('[data-tool="line"]').click();await conAt(-15,8);await conAt(-5,8);await objects(2);
+ await page.locator('[data-tool="select"]').click();await conAt(-25,5);await page.locator('[data-constraint="fix"]').click();await conCount("fix",1);
+ await page.locator('[data-constraint="normal"]').click();await conAt(-10,8);await conAt(-25,5);await conCount("normal",1);
+ await page.locator("#sk-finish").click();await page.locator("#sketch-canvas").waitFor({state:"hidden"});
+ const ns=JSON.parse((await save()).toString()).features[0].params.sketch;
+ const nc=ns.constraints.find(c=>c.type==="normal"),nl=ns.entities[nc.refs[0]],ne=ns.entities[nc.refs[1]];
+ const np=ns.points[nl.p1],nq=ns.points[nl.p2],no=ns.points[ne.c];
+ assert(Math.abs((nq[0]-np[0])*(no[1]-np[1])-(nq[1]-np[1])*(no[0]-np[0]))/Math.hypot(nq[0]-np[0],nq[1]-np[1])<1e-6);
+ console.log("PASS normal through the center of a fixed circle");
  await menuCommand("offline");
  await page.waitForFunction(()=>document.body.dataset.offline==="ready"||document.querySelector("#errors").textContent.trim(),{},{timeout:240000});await noError();
  await context.setOffline(true);await page.reload();await ready();await volume(0);
