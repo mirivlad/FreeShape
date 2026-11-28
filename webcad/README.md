@@ -118,3 +118,9 @@ removes the entire line, like desktop FreeShape. Helper geometry cannot be edite
 with these tools. Region selection now displays exact native face area;
 the selective-extrusion test compares the result to the solved region area
 rather than nominal click coordinates.
+
+
+Compatibility correction: OCP 7.x collection names are supported alongside
+OCP 8.x, so spline interpolation and control-point splines can use the native
+kernel in either environment. Failed generation of sketch display geometry
+now rolls back the edit before adding any undo entry.

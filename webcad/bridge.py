@@ -409,6 +409,9 @@ def sketch_edit(req):
                 raise ValueError("Unsupported constraint")
         if not s.solve(weights=weights) and set(s.status.get("bad", [])) - old_bad:
             raise ValueError("Constraint cannot be solved")
+        # Build the browser geometry before recording the change. If OCP cannot
+        # render a new entity, the sketch and its history must stay unchanged.
+        result = sketch_view()
     except Exception:
         draft["sketch"] = Sketch.from_dict(before)
         draft["sketch"].solve()
@@ -416,7 +419,8 @@ def sketch_edit(req):
     draft["undo"].append(before)
     del draft["undo"][:-100]
     draft["redo"].clear()
-    return sketch_view()
+    result.update(undo=True, redo=False)
+    return result
 
 
 def finish_sketch():

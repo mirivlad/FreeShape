@@ -1,6 +1,7 @@
 """Native regression for the same bridge imported by the browser worker."""
 import math
 import unittest
+from unittest.mock import patch
 
 from webcad import bridge
 
@@ -113,6 +114,15 @@ class SketchTools(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.modify("trim", circle, (15, 20))
         self.assertIn(circle, bridge.draft["sketch"].entities)
+
+    def test_failed_geometry_serialization_rolls_back(self):
+        before = bridge.draft["sketch"].to_dict()
+        with patch.object(bridge, "sketch_view", side_effect=RuntimeError("Kernel error")):
+            with self.assertRaises(RuntimeError):
+                self.draw("line", [(0, 0), (10, 0)])
+        self.assertEqual(bridge.draft["sketch"].to_dict(), before)
+        self.assertFalse(bridge.draft["undo"])
+        self.assertFalse(bridge.draft["redo"])
 
     def test_bad_inputs_roll_back(self):
         for tool, points, args in [

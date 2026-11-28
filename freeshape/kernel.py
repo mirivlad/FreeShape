@@ -535,7 +535,11 @@ def pole_curve_2d(pts, closed=False, weights=None):
     towards the others), cubic where there are enough points. weights: one per point for a rational curve: three
     points weighted 1, w, 1 make an exact conic. None if there aren't enough points."""
     from OCP.Geom2d import Geom2d_BSplineCurve
-    from OCP.OCP.collections import Array1_gp_Pnt2d, Array1_double, Array1_int
+    try:
+        from OCP.TColgp import TColgp_Array1OfPnt2d as Array1_gp_Pnt2d
+        from OCP.TColStd import TColStd_Array1OfReal as Array1_double, TColStd_Array1OfInteger as Array1_int
+    except ImportError:  # OCP >= 8
+        from OCP.OCP.collections import Array1_gp_Pnt2d, Array1_double, Array1_int
     from OCP.gp import gp_Pnt2d
     q = [(float(x), float(y)) for x, y in pts]
     n = len(q)
@@ -574,7 +578,10 @@ def spline_curve_2d(pts, closed=False):
     """A smooth curve passing through the points (closed: a loop), as an OpenCascade 2D B-spline.
     None if there aren't enough points."""
     from OCP.Geom2dAPI import Geom2dAPI_Interpolate
-    from OCP.OCP.collections import HArray1_gp_Pnt2d as TColgp_HArray1OfPnt2d
+    try:
+        from OCP.TColgp import TColgp_HArray1OfPnt2d
+    except ImportError:  # OCP >= 8
+        from OCP.OCP.collections import HArray1_gp_Pnt2d as TColgp_HArray1OfPnt2d
     from OCP.gp import gp_Pnt2d
     q = _clean_pts2d(pts, closed)
     if len(q) < (3 if closed else 2):
